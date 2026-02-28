@@ -7,10 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 - **Added**
-  - (placeholder)
+  - Generic session helper utilities (`ensureSession`, `createSessionCookie`, `getSessionIdFromRequest`) compatible with middleware usage.
 
 - **Changed**
-  - (placeholder)
+  - `withSession` middleware now delegates to shared `utils/session` helpers while preserving existing cookie defaults.
 
 - **Fixed**
   - (placeholder)

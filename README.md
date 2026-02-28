@@ -15,6 +15,7 @@ Public generic API helper package.
 
 - Public helper exports compiled to `dist/**`
 - Reusable transport-security helper utilities
+- Reusable session helper utilities compatible with `withSession` middleware
 - Governance/legal materials (`docs/**`, `legal/**`)
 
 ## Package Boundary (Public by Design)
@@ -32,6 +33,14 @@ Public generic API helper package.
   - `isInsecureLocalRequest(request)`
   - `shouldEnforceHttps()`
 - These helpers support strict header policy and HTTPS enforcement behavior for callers.
+
+## Session Helper Baseline
+
+- Exports helper functions:
+  - `ensureSession(request, options?)`
+  - `getSessionIdFromRequest(request, cookieName?)`
+  - `createSessionCookie(sessionId, options?)`
+- `withSession` middleware is implemented using these helpers and keeps secure defaults (`HttpOnly`, `Secure`, `SameSite=None`, `Path=/`).
 
 ## Install
 

@@ -19,3 +19,10 @@ export {
   isValidPkceCodeVerifier,
   isValidPkceCookieId,
 } from "./utils/oauth-pkce.js";
+
+export {
+  DEFAULT_SESSION_COOKIE_NAME,
+  createSessionCookie,
+  ensureSession,
+  getSessionIdFromRequest,
+} from "./utils/session.js";

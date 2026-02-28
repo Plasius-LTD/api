@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   applyBaselineSecurityHeaders,
+  ensureSession,
   generatePkceCodeVerifier,
   getPkceCookieName,
+  getSessionIdFromRequest,
   isValidPkceCodeVerifier,
   isHttpsRequest,
   parseEncodedState,
@@ -32,5 +34,10 @@ describe("public API helper entrypoint", () => {
       returnTo: "/dashboard",
       pkceId: undefined,
     });
+  });
+
+  it("exports generic session helpers", () => {
+    expect(typeof ensureSession).toBe("function");
+    expect(typeof getSessionIdFromRequest).toBe("function");
   });
 });

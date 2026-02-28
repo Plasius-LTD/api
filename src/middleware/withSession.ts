@@ -1,36 +1,21 @@
 import { HttpRequest, InvocationContext } from "@azure/functions";
 import { Middleware } from "./withMiddleware.js";
 
-import { randomUUID } from "crypto";
-import { getCookie, getExtraOutputs } from "../utils/index.js";
-import { http } from "@azure/functions/types/app.js";
+import { ensureSession, getExtraOutputs } from "../utils/index.js";
 
 export const withSession: Middleware = async (
   req: HttpRequest,
   context: InvocationContext
 ) => {
-  const cookieHeader = req.headers.get("cookie") ?? "";
-  let sessionId = getCookie(req, "sessionId");
-
   const { cookies } = getExtraOutputs(context);
+  const session = ensureSession(req);
 
-  if (!sessionId) {
-    sessionId = randomUUID();
-    const newCookies = [
-      ...cookies,
-      {
-        name: "sessionId",
-        value: sessionId,
-        path: "/",
-        httpOnly: true,
-        sameSite: "None",
-        secure: true,
-      },
-    ];
+  if (session.isNew && session.cookie) {
+    const newCookies = [...cookies, session.cookie];
     context.extraOutputs.set("cookies", newCookies);
   }
 
-  context.extraInputs.set("sessionId", sessionId);
+  context.extraInputs.set("sessionId", session.sessionId);
 
   return true;
 };
