@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+- **Added**
+  - (placeholder)
+
+- **Changed**
+  - (placeholder)
+
+- **Fixed**
+  - (placeholder)
+
+- **Security**
+  - (placeholder)
+
+## [1.0.1] - 2026-02-28
+
 ### Added
 
 - Standalone public package scaffold for `@plasius/api`.
@@ -47,5 +61,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Initial public release scaffold for `@plasius/api`.
 
-[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.0.1...HEAD
 [1.0.0]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.0
+[1.0.1]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.1
