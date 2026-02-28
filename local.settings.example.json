@@ -1,0 +1,16 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "COSMOS_ENDPOINT": "https://localhost:8081/",
+    "COSMOS_KEY": "<replace-with-cosmos-key>",
+    "REDIS_URL": "redis://localhost:6379/0",
+    "REDIS_PASSWORD": "<replace-with-redis-password>",
+    "JWT_SECRET": "<replace-with-jwt-secret>",
+    "REFRESH_SECRET": "<replace-with-refresh-secret>",
+    "OPENAI_API_KEY": "<replace-with-openai-key>",
+    "DOMAIN": "http://localhost:7071",
+    "FRONTEND_DOMAIN": "http://localhost:5173"
+  }
+}

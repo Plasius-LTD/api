@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+
+.npm-cache/
+.npm-cache-packcheck/
+
+local.settings.json
+__blobstorage__/
+__queuestorage__/
+__azurite_db*__.json

@@ -1,0 +1,564 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Plasius API",
+    "version": "0.0.0"
+  },
+  "tags": [
+    {
+      "name": "Assets"
+    }
+  ],
+  "paths": {
+    "/assets/{type}/list": {
+      "get": {
+        "operationId": "Assets_ListAssets",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The request has succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Assets.Asset"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Assets"
+        ]
+      }
+    },
+    "/assets/{type}/{id}": {
+      "get": {
+        "operationId": "Assets_GetAsset",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The request has succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Assets.Asset"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Assets"
+        ]
+      },
+      "put": {
+        "operationId": "Assets_UpdateAsset",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "There is no content to send for this request, but the headers may be useful. "
+          }
+        },
+        "tags": [
+          "Assets"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Assets.Asset"
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "Assets_PatchAsset",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "There is no content to send for this request, but the headers may be useful. "
+          }
+        },
+        "tags": [
+          "Assets"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Assets.AssetUpdate"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "Assets_DeleteAsset",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "There is no content to send for this request, but the headers may be useful. "
+          }
+        },
+        "tags": [
+          "Assets"
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Assets.Asset": {
+        "type": "object",
+        "required": [
+          "cacheable",
+          "userUploaded",
+          "userCreated",
+          "validated",
+          "validatedAt",
+          "validatedBy"
+        ],
+        "properties": {
+          "cacheable": {
+            "type": "boolean"
+          },
+          "userUploaded": {
+            "type": "boolean"
+          },
+          "userCreated": {
+            "type": "boolean"
+          },
+          "validated": {
+            "type": "boolean"
+          },
+          "validatedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "validatedBy": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Assets.BaseAsset"
+          }
+        ]
+      },
+      "Assets.AssetUpdate": {
+        "type": "object",
+        "properties": {
+          "cacheable": {
+            "type": "boolean"
+          },
+          "userUploaded": {
+            "type": "boolean"
+          },
+          "userCreated": {
+            "type": "boolean"
+          },
+          "validated": {
+            "type": "boolean"
+          },
+          "validatedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "validatedBy": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Assets.BaseAssetUpdate"
+          }
+        ]
+      },
+      "Assets.BaseAsset": {
+        "type": "object",
+        "required": [
+          "primaryKey",
+          "id",
+          "version",
+          "entityType",
+          "createdBy",
+          "createdAt",
+          "updatedBy",
+          "updatedAt",
+          "isDeleted",
+          "deletedAt",
+          "deletedBy",
+          "deletedReason"
+        ],
+        "properties": {
+          "primaryKey": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "entityType": {
+            "type": "string"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "isDeleted": {
+            "type": "boolean"
+          },
+          "deletedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "deletedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "deletedReason": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "Assets.BaseAssetUpdate": {
+        "type": "object",
+        "properties": {
+          "primaryKey": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "entityType": {
+            "type": "string"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "isDeleted": {
+            "type": "boolean"
+          },
+          "deletedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "deletedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "deletedReason": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "Assets.BaseComponent": {
+        "type": "object",
+        "required": [
+          "name",
+          "description"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "Assets.ImageAsset": {
+        "type": "object",
+        "required": [
+          "imageUrl",
+          "thumbnailUrl",
+          "width",
+          "height"
+        ],
+        "properties": {
+          "imageUrl": {
+            "type": "string"
+          },
+          "thumbnailUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "width": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "height": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Assets.Asset"
+          }
+        ]
+      },
+      "Assets.ImageAssetUpdate": {
+        "type": "object",
+        "properties": {
+          "imageUrl": {
+            "type": "string"
+          },
+          "thumbnailUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "width": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "height": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Assets.AssetUpdate"
+          }
+        ]
+      },
+      "Assets.LevelOfDetailComponent": {
+        "type": "object",
+        "required": [
+          "level",
+          "distance",
+          "modelUrl",
+          "thumbnailUrl"
+        ],
+        "properties": {
+          "level": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "distance": {
+            "type": "number",
+            "format": "float"
+          },
+          "modelUrl": {
+            "type": "string"
+          },
+          "thumbnailUrl": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Assets.BaseComponent"
+          }
+        ]
+      },
+      "Assets.ModelAsset": {
+        "type": "object",
+        "required": [
+          "modelUrl",
+          "thumbnailUrl",
+          "format",
+          "size",
+          "components"
+        ],
+        "properties": {
+          "modelUrl": {
+            "type": "string"
+          },
+          "thumbnailUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "format": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "components": {
+            "type": "array",
+            "items": {}
+          }
+        },
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Assets.Asset"
+          }
+        ]
+      },
+      "Assets.ModelAssetUpdate": {
+        "type": "object",
+        "properties": {
+          "modelUrl": {
+            "type": "string"
+          },
+          "thumbnailUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "format": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "components": {
+            "type": "array",
+            "items": {}
+          }
+        },
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Assets.AssetUpdate"
+          }
+        ]
+      },
+      "Types.Asset": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "name",
+          "createdBy",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  }
+}

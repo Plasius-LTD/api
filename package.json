@@ -1,0 +1,93 @@
+{
+  "name": "@plasius/api",
+  "version": "1.0.0",
+  "description": "Generic public API security and middleware helpers.",
+  "private": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CODE_OF_CONDUCT.md",
+    "CONTRIBUTORS.md",
+    "docs",
+    "legal"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "watch": "tsc -w",
+    "clean": "rimraf dist tsconfig.tsbuildinfo",
+    "prestart": "npm run clean && npm run build",
+    "start": "func start",
+    "dev": "func start --javascript --host 0.0.0.0 --port 7071 --cors '*' --cors-credentials",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint \"src/**/*.ts\"",
+    "pack:check": "node scripts/verify-public-package.cjs",
+    "prepublishOnly": "npm run build && npm run pack:check",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "api",
+    "middleware",
+    "security",
+    "transport-security",
+    "pkce"
+  ],
+  "author": "Plasius LTD <development@plasius.co.uk>",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Plasius-LTD/api.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Plasius-LTD/api/issues"
+  },
+  "homepage": "https://github.com/Plasius-LTD/api#readme",
+  "dependencies": {
+    "@azure/functions": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^24.3.1",
+    "@typescript-eslint/eslint-plugin": "^8.56.0",
+    "@typescript-eslint/parser": "^8.56.0",
+    "@vitest/coverage-v8": "^4.0.18",
+    "azure-functions-core-tools": "^2.0.0",
+    "eslint": "^10.0.1",
+    "rimraf": "^6.0.1",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "funding": [
+    {
+      "type": "patreon",
+      "url": "https://www.patreon.com/c/plasiusltd/membership"
+    },
+    {
+      "type": "github",
+      "url": "https://github.com/sponsors/Plasius-LTD"
+    }
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "overrides": {
+    "minimatch": "^10.2.1"
+  }
+}
