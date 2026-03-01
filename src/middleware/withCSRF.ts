@@ -1,4 +1,4 @@
-import { Cookie, HttpRequest, InvocationContext } from "@azure/functions";
+import { HttpRequest, InvocationContext } from "@azure/functions";
 import type { Middleware } from "./withMiddleware";
 import { getCookie } from "../utils";
 import { randomUUID } from "crypto";

@@ -1,17 +1,14 @@
 import { HttpRequest, InvocationContext } from "@azure/functions";
 import { Middleware } from "./withMiddleware.js";
-import { extractAndHashClientIp } from "../utils/index.js";
 
 export const withLogging: Middleware = async (
   req: HttpRequest,
   context: InvocationContext
 ) => {
-  const ip = extractAndHashClientIp(req);
-  const userAgent = req.headers.get("user-agent") ?? "unknown";
   const method = req.method;
   const path = req.url;
 
-  const prefix = `${method} ${path} `; //| IP: ${ip} | Agent: ${userAgent} | `;
+  const prefix = `${method} ${path} `;
 
   function makeLogger(context: InvocationContext) {
     return {
