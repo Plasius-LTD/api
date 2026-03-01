@@ -18,6 +18,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Security**
   - (placeholder)
 
+## [1.0.6] - 2026-03-01
+
+- **Added**
+  - Public middleware export surface via package root and `@plasius/api/middleware` subpath.
+  - Middleware export-surface tests for root and middleware barrel coverage.
+
+- **Changed**
+  - Root package now re-exports middleware primitives (`withMiddleware`, `withCors`, `withRateLimiting`, etc.).
+  - `withRateLimiting` now lazily initializes Redis clients to avoid import-time side effects.
+
+- **Fixed**
+  - Removed middleware import-time Redis connection attempts that could emit runtime errors in consumer environments.
+
+- **Security**
+  - (placeholder)
+
 ## [1.0.5] - 2026-03-01
 
 - **Added**
@@ -117,10 +133,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Initial public release scaffold for `@plasius/api`.
 
-[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.0.5...HEAD
+[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.0.6...HEAD
 [1.0.0]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.0
 [1.0.1]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.1
 [1.0.2]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.2
 [1.0.3]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.3
 [1.0.4]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.4
 [1.0.5]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.5
+[1.0.6]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.6

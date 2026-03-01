@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   applyBaselineSecurityHeaders,
+  withMiddleware,
+  withCors,
+  withRateLimiting,
   ensureSession,
   generatePkceCodeVerifier,
   getPkceCookieName,
@@ -39,5 +42,11 @@ describe("public API helper entrypoint", () => {
   it("exports generic session helpers", () => {
     expect(typeof ensureSession).toBe("function");
     expect(typeof getSessionIdFromRequest).toBe("function");
+  });
+
+  it("exports generic middleware helpers", () => {
+    expect(typeof withMiddleware).toBe("function");
+    expect(typeof withCors).toBe("function");
+    expect(typeof withRateLimiting).toBe("function");
   });
 });

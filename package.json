@@ -1,6 +1,6 @@
 {
   "name": "@plasius/api",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Generic public API security and middleware helpers.",
   "private": false,
   "main": "./dist/index.js",
@@ -20,6 +20,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./middleware": {
+      "types": "./dist/middleware/index.d.ts",
+      "default": "./dist/middleware/index.js"
+    },
+    "./middleware/*": {
+      "types": "./dist/middleware/*.d.ts",
+      "default": "./dist/middleware/*.js"
     },
     "./package.json": "./package.json"
   },

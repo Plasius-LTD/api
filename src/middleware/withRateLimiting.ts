@@ -13,7 +13,34 @@ export interface ApiRateLimiterConfig {
   perApi?: RateLimitConfig;
 }
 
-const redis = new Redis(process.env.REDIS_URL!);
+const redisUrl = process.env.REDIS_URL?.trim();
+const redisHost = process.env.REDIS_HOST?.trim();
+const redisEnabled =
+  (process.env.REDIS_ENABLED ??
+    ((redisUrl || redisHost) ? "true" : "false")).toLowerCase() === "true";
+
+let redisClient: Redis | null | undefined;
+
+function getRedisClient(): Redis | null {
+  if (!redisEnabled) {
+    return null;
+  }
+
+  if (redisClient !== undefined) {
+    return redisClient;
+  }
+
+  redisClient = redisUrl
+    ? new Redis(redisUrl, { lazyConnect: true })
+    : new Redis({
+        host: redisHost ?? "redis",
+        port: Number(process.env.REDIS_PORT ?? 6379),
+        password: process.env.REDIS_PASSWORD,
+        lazyConnect: true,
+      });
+
+  return redisClient;
+}
 
 async function checkRateLimit(
   key: string,
@@ -33,22 +60,42 @@ async function checkRateLimit(
   const now = Date.now();
   const windowKey = `${key}:${Math.floor(now / config.windowMs)}`;
 
-  const count = await redis.incr(windowKey);
-  if (count === 1) {
-    await redis.pexpire(windowKey, config.windowMs);
+  const redis = getRedisClient();
+  if (!redis) {
+    logger?.log(`Rate limiting bypassed for ${key} (Redis disabled)`);
+    return {
+      allowed: true,
+      remaining: config.limit,
+      reset: Math.ceil((now + config.windowMs) / 1000),
+    };
   }
 
-  const ttl = await redis.pttl(windowKey);
-  const retryAfter = count > config.limit ? Math.ceil(ttl / 1000) : undefined;
-  const remaining = Math.max(config.limit - count, 0);
-  const reset = Math.ceil((now + ttl) / 1000); // Unix timestamp when reset will happen
+  try {
+    const count = await redis.incr(windowKey);
+    if (count === 1) {
+      await redis.pexpire(windowKey, config.windowMs);
+    }
 
-  if (count > config.limit) {
-    logger?.log(`Rate limit exceeded for ${key}. Retry after ${retryAfter}s.`);
-    return { allowed: false, remaining: 0, retryAfter, reset };
+    const ttl = await redis.pttl(windowKey);
+    const retryAfter = count > config.limit ? Math.ceil(ttl / 1000) : undefined;
+    const remaining = Math.max(config.limit - count, 0);
+    const reset = Math.ceil((now + ttl) / 1000); // Unix timestamp when reset will happen
+
+    if (count > config.limit) {
+      logger?.warn(`Rate limit exceeded for ${key}. Retry after ${retryAfter}s.`);
+      return { allowed: false, remaining: 0, retryAfter, reset };
+    }
+
+    return { allowed: true, remaining, reset };
+  } catch (error: unknown) {
+    logger?.warn(`Rate limit backend unavailable for ${key}; allowing request.`);
+    logger?.warn(error);
+    return {
+      allowed: true,
+      remaining: config.limit,
+      reset: Math.ceil((now + config.windowMs) / 1000),
+    };
   }
-
-  return { allowed: true, remaining, reset };
 }
 
 export function withRateLimiting(config: ApiRateLimiterConfig): Middleware {
