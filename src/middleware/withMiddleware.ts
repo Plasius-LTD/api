@@ -1,6 +1,4 @@
 import type { HttpRequest, HttpResponseInit, InvocationContext } from "@azure/functions";
-import { createHmac } from "crypto";
-const HMAC_SECRET = process.env.HMAC_SECRET ?? "default-secret"; // Replace in production
 import { withLogging } from "./withLogging";
 import { extractAndHashClientIp, getExtraOutputs } from "../utils/index.js";
 import {

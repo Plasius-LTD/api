@@ -6,7 +6,7 @@ export function sanitizeUrlForPartitionKey(rawUrl: string): string {
       .replace(/[^a-z0-9]/g, "-") // convert all non-alphanumeric characters to hyphens
       .replace(/^-+|-+$/g, ""); // remove leading/trailing hyphens
     return sanitized;
-  } catch (e) {
+  } catch {
     throw new Error(`Invalid URL passed for sanitization: "${rawUrl}"`);
   }
 }

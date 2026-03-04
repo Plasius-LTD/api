@@ -51,6 +51,7 @@ npm install @plasius/api
 ## Entrypoints
 
 - Main module: `@plasius/api`
+- Middleware module: `@plasius/api/middleware`
 
 ### Example
 
@@ -60,6 +61,10 @@ import {
   isHttpsRequest,
   shouldEnforceHttps,
 } from "@plasius/api";
+```
+
+```ts
+import { withCors, withRateLimiting, withMiddleware } from "@plasius/api/middleware";
 ```
 
 ## Local development

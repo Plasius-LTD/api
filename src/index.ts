@@ -4,6 +4,7 @@ export {
   isInsecureLocalRequest,
   shouldEnforceHttps,
 } from "./middleware/transportSecurity.js";
+export * from "./middleware/index.js";
 
 export {
   decodeOAuthReturnToState,
