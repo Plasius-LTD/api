@@ -18,7 +18,7 @@ jobs:
           cache: "npm"
 
       - name: Install deps
-        run: npm ci --no-fund --no-audit --legacy-peer-deps
+        run: npm ci --no-fund --no-audit
 
       - name: Lint
         run: npm run lint
@@ -57,7 +57,7 @@ jobs:
           echo "Using coverage report: $LCOV_FILE"
           echo "LCOV_FILE=$LCOV_FILE" >> "$GITHUB_ENV"
 
-      - name: Enforce line coverage >= 45%
+      - name: Enforce line coverage >= 80%
         run: |
           set -euo pipefail
           if [ -z "${LCOV_FILE:-}" ] || [ ! -f "$LCOV_FILE" ]; then
@@ -77,8 +77,8 @@ jobs:
           PCT=$(awk -v lh="$LH" -v lf="$LF" 'BEGIN{printf "%.2f", (lh/lf)*100}')
           echo "Line coverage: ${PCT}% (${LH}/${LF})"
 
-          awk -v pct="$PCT" 'BEGIN{exit(pct >= 45 ? 0 : 1)}' || {
-            echo "Coverage gate failed: ${PCT}% < 45%"
+          awk -v pct="$PCT" 'BEGIN{exit(pct >= 80 ? 0 : 1)}' || {
+            echo "Coverage gate failed: ${PCT}% < 80%"
             exit 1
           }
 

@@ -9,10 +9,10 @@ module.exports = {
       reporter: ["text", "json", "html", "lcov"],
       exclude: ["**/node_modules/**", "dist", "coverage", "tests/**", "**/*.config.*"],
       thresholds: {
-        lines: 45,
-        functions: 50,
-        statements: 45,
-        branches: 40
+        lines: 80,
+        functions: 80,
+        statements: 80,
+        branches: 70
       }
     }
   }
