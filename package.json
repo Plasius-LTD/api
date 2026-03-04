@@ -46,6 +46,7 @@
     "audit:deps": "npm ls --all --omit=optional --omit=peer > /dev/null 2>&1 || true",
     "audit:npm": "npm audit --audit-level=high --omit=dev",
     "audit:test": "vitest run --coverage",
+    "audit:all": "npm run typecheck && npm run audit:eslint && npm run audit:deps && npm run audit:npm && npm run audit:test",
     "lint": "eslint . --max-warnings=0",
     "pack:check": "node scripts/verify-public-package.cjs",
     "prepublishOnly": "npm run build && npm run pack:check",
