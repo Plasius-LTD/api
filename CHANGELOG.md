@@ -7,30 +7,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 - **Added**
-  - (placeholder)
+  - Added focused middleware and HTTP utility test coverage for core composition, rate limiting, and error helpers.
 
 - **Changed**
-  - (placeholder)
+  - Restored CI line-coverage enforcement to `>= 80%`.
+  - Restored Vitest thresholds to `lines/functions/statements >= 80%` and `branches >= 70%`.
 
 - **Fixed**
-  - (placeholder)
+  - Removed `azure-functions-core-tools` from package devDependencies to avoid toolchain drift and unnecessary transitive install risk.
 
 - **Security**
-  - (placeholder)
+  - Updated dependency override policy to pin `minimatch` to a patched `^10.2.4`.
 
 ## [1.0.9] - 2026-03-04
 
 - **Added**
-  - (placeholder)
+  - Added repository-wide private certificate-key ignore rules for `certs/**/*-key.pem`, `certs/**/*.key`, and `certs/**/*.p8`.
 
 - **Changed**
-  - (placeholder)
+  - Standardized repository AGENTS quality-gate guidance for accessibility, code quality, and secrets handling.
 
 - **Fixed**
-  - (placeholder)
+  - Removed tracked localhost private-key material from source control.
 
 - **Security**
-  - (placeholder)
+  - Rotated leaked localhost development key material and retained only public certificate assets in-repo.
 
 ## [1.0.6] - 2026-03-01
 
