@@ -11,3 +11,8 @@ local.settings.json
 __blobstorage__/
 __queuestorage__/
 __azurite_db*__.json
+
+# Private key material in cert directories (never commit)
+**/certs/**/*-key.pem
+**/certs/**/*.key
+**/certs/**/*.p8
