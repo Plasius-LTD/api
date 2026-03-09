@@ -7,6 +7,35 @@ import { getExtraOutputs } from "../utils/index.js";
 const CSRF_HEADER_NAME = "x-csrf-token";
 const CSRF_COOKIE_NAME = "csrf-token";
 
+function normalizePathname(pathname: string): string {
+  const normalized = pathname.trim().replace(/\/+$/, "");
+  return normalized.length > 0 ? normalized : "/";
+}
+
+function shouldSkipCsrfValidation(request: HttpRequest): boolean {
+  const method = request.method?.toUpperCase();
+  if (!method || method === "GET" || method === "HEAD" || method === "OPTIONS") {
+    return false;
+  }
+
+  let pathname = "";
+  try {
+    pathname = normalizePathname(new URL(request.url).pathname);
+  } catch {
+    return false;
+  }
+
+  const oauthCallbackPattern = /(^|\/)(?:api\/)?oauth\/[^/]+\/callback$/i;
+  const appleNotificationPattern = /(^|\/)(?:api\/)?oauth\/apple\/notification$/i;
+  const oauthRefreshPattern = /(^|\/)(?:api\/)?oauth\/refresh-token$/i;
+
+  return (
+    oauthCallbackPattern.test(pathname) ||
+    appleNotificationPattern.test(pathname) ||
+    oauthRefreshPattern.test(pathname)
+  );
+}
+
 export const withCSRF = (): Middleware => {
   return async (request: HttpRequest, context: InvocationContext) => {
     const logger = context.extraInputs.get("logger") as {
@@ -19,6 +48,11 @@ export const withCSRF = (): Middleware => {
     const method = request.method?.toUpperCase();
     const isReadOnly =
       method === "GET" || method === "HEAD" || method === "OPTIONS";
+
+    if (shouldSkipCsrfValidation(request)) {
+      logger.log("CSRF validation skipped for OAuth callback/notification route");
+      return true;
+    }
 
     // Read token from header and cookie
     const headerToken = request.headers?.get(CSRF_HEADER_NAME);

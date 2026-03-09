@@ -141,6 +141,29 @@ describe("withCSRF", () => {
     expect(shouldContinue).toBe(true);
     expect(context.extraOutputs.get("http")).toBeUndefined();
   });
+
+  it("skips csrf validation for the refresh-token route", async () => {
+    const context = createContext();
+    const request = createRequest("POST", "https://api.example.com/api/oauth/refresh-token");
+
+    const shouldContinue = await withCSRF()(request, context);
+
+    expect(shouldContinue).toBe(true);
+    expect(context.extraOutputs.get("http")).toBeUndefined();
+  });
+
+  it("skips csrf validation for normalized refresh-token route variants", async () => {
+    const context = createContext();
+    const request = createRequest(
+      "POST",
+      "https://api.example.com/proxy/api/oauth/refresh-token/",
+    );
+
+    const shouldContinue = await withCSRF()(request, context);
+
+    expect(shouldContinue).toBe(true);
+    expect(context.extraOutputs.get("http")).toBeUndefined();
+  });
 });
 
 describe("withSecurity", () => {
