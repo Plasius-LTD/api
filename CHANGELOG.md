@@ -13,6 +13,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - (placeholder)
 
 - **Fixed**
+  - (placeholder)
+
+- **Security**
+  - (placeholder)
+
+## [1.0.11] - 2026-03-09
+
+- **Added**
+  - (placeholder)
+
+- **Changed**
+  - (placeholder)
+
+- **Fixed**
   - Exempted OAuth callback, Apple notification, and `/oauth/refresh-token` routes from CSRF validation in the shared middleware package, matching the live backend expectations.
   - Made shared CSRF and session middleware derive cookie security from the incoming request so localhost and forwarded deployments use the correct `secure`/`SameSite` settings without backend-local overrides.
 
@@ -163,7 +177,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Initial public release scaffold for `@plasius/api`.
 
-[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.0.10...HEAD
+[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.0.11...HEAD
 [1.0.0]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.0
 [1.0.1]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.1
 [1.0.2]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.2
@@ -173,3 +187,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [1.0.6]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.6
 [1.0.9]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.9
 [1.0.10]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.10
+[1.0.11]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.11
