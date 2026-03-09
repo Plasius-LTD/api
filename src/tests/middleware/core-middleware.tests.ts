@@ -115,6 +115,25 @@ describe("withCSRF", () => {
     });
   });
 
+  it("issues a localhost-friendly csrf cookie for insecure local requests", async () => {
+    const context = createContext();
+    const request = createRequest("GET", "http://localhost:7071/resource", {
+      host: "localhost:7071",
+    });
+
+    const shouldContinue = await withCSRF()(request, context);
+    const cookies = context.extraOutputs.get("cookies") as Array<Record<string, unknown>>;
+
+    expect(shouldContinue).toBe(true);
+    expect(cookies).toHaveLength(1);
+    expect(cookies[0]).toMatchObject({
+      name: "csrf-token",
+      value: expect.any(String),
+      secure: false,
+      sameSite: "Lax",
+    });
+  });
+
   it("blocks write requests with a missing or mismatched token", async () => {
     const context = createContext();
     const request = createRequest("POST", "https://api.example.com/resource", {

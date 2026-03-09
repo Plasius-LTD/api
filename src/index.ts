@@ -27,3 +27,8 @@ export {
   ensureSession,
   getSessionIdFromRequest,
 } from "./utils/session.js";
+
+export {
+  getCookieSecurity,
+  resolvePublicBaseUrl,
+} from "./utils/cookie-security.js";

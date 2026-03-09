@@ -6,6 +6,7 @@ import {
   withRateLimiting,
   ensureSession,
   generatePkceCodeVerifier,
+  getCookieSecurity,
   getPkceCookieName,
   getSessionIdFromRequest,
   isValidPkceCodeVerifier,
@@ -41,6 +42,7 @@ describe("public API helper entrypoint", () => {
 
   it("exports generic session helpers", () => {
     expect(typeof ensureSession).toBe("function");
+    expect(typeof getCookieSecurity).toBe("function");
     expect(typeof getSessionIdFromRequest).toBe("function");
   });
 

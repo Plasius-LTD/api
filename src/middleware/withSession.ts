@@ -1,14 +1,16 @@
 import { HttpRequest, InvocationContext } from "@azure/functions";
 import { Middleware } from "./withMiddleware.js";
 
-import { ensureSession, getExtraOutputs } from "../utils/index.js";
+import { ensureSession, getCookieSecurity, getExtraOutputs } from "../utils/index.js";
 
 export const withSession: Middleware = async (
   req: HttpRequest,
   context: InvocationContext
 ) => {
   const { cookies } = getExtraOutputs(context);
-  const session = ensureSession(req);
+  const session = ensureSession(req, {
+    cookieOptions: getCookieSecurity(req),
+  });
 
   if (session.isNew && session.cookie) {
     const newCookies = [...cookies, session.cookie];

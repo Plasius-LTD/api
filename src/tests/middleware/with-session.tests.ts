@@ -2,9 +2,13 @@ import type { HttpRequest, InvocationContext } from "@azure/functions";
 import { describe, expect, it } from "vitest";
 import { withSession } from "../../middleware/withSession.js";
 
-function createRequest(cookieHeader?: string): HttpRequest {
+function createRequest(
+  url: string,
+  headers: Record<string, string> = {}
+): HttpRequest {
   return {
-    headers: new Headers(cookieHeader ? { cookie: cookieHeader } : {}),
+    url,
+    headers: new Headers(headers),
   } as unknown as HttpRequest;
 }
 
@@ -17,7 +21,9 @@ function createContext(): InvocationContext {
 
 describe("withSession middleware", () => {
   it("reuses existing session id when present", async () => {
-    const request = createRequest("sessionId=existing-id");
+    const request = createRequest("https://api.example.com/resource", {
+      cookie: "sessionId=existing-id",
+    });
     const context = createContext();
 
     const result = await withSession(request, context);
@@ -27,8 +33,8 @@ describe("withSession middleware", () => {
     expect(context.extraOutputs.get("cookies")).toBeUndefined();
   });
 
-  it("issues session cookie and stores session id when missing", async () => {
-    const request = createRequest();
+  it("issues a secure session cookie for https requests", async () => {
+    const request = createRequest("https://api.example.com/resource");
     const context = createContext();
 
     const result = await withSession(request, context);
@@ -48,6 +54,32 @@ describe("withSession middleware", () => {
       httpOnly: true,
       sameSite: "None",
       secure: true,
+    });
+  });
+
+  it("issues a localhost-friendly session cookie for insecure local requests", async () => {
+    const request = createRequest("http://localhost:7071/api/resource", {
+      host: "localhost:7071",
+    });
+    const context = createContext();
+
+    const result = await withSession(request, context);
+    const sessionId = context.extraInputs.get("sessionId");
+    const cookies = context.extraOutputs.get("cookies") as Array<
+      Record<string, unknown>
+    >;
+
+    expect(result).toBe(true);
+    expect(typeof sessionId).toBe("string");
+    expect(Array.isArray(cookies)).toBe(true);
+    expect(cookies).toHaveLength(1);
+    expect(cookies[0]).toMatchObject({
+      name: "sessionId",
+      value: sessionId,
+      path: "/",
+      httpOnly: true,
+      sameSite: "Lax",
+      secure: false,
     });
   });
 });

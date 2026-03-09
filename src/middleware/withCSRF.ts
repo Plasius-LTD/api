@@ -1,6 +1,6 @@
 import { HttpRequest, InvocationContext } from "@azure/functions";
 import type { Middleware } from "./withMiddleware";
-import { getCookie } from "../utils";
+import { getCookie, getCookieSecurity } from "../utils";
 import { randomUUID } from "crypto";
 import { getExtraOutputs } from "../utils/index.js";
 
@@ -61,13 +61,13 @@ export const withCSRF = (): Middleware => {
     // ✅ If GET and no CSRF cookie set, generate one
     if (isReadOnly && !cookieToken) {
       const newToken = randomUUID();
+      const cookieSecurity = getCookieSecurity(request);
       const newCookies = [
         ...cookies,
         {
           name: CSRF_COOKIE_NAME,
           value: newToken,
-          secure: true,
-          sameSite: "None",
+          ...cookieSecurity,
           path: "/",
           maxAge: 10 * 60, // 10 minutes
         },

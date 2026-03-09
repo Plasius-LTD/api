@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Fixed**
   - Exempted OAuth callback, Apple notification, and `/oauth/refresh-token` routes from CSRF validation in the shared middleware package, matching the live backend expectations.
+  - Made shared CSRF and session middleware derive cookie security from the incoming request so localhost and forwarded deployments use the correct `secure`/`SameSite` settings without backend-local overrides.
 
 - **Security**
   - (placeholder)
