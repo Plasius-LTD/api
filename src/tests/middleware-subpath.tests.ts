@@ -9,6 +9,7 @@ describe("middleware subpath source surface", () => {
     expect(typeof middlewareModule.withSession).toBe("function");
     expect(typeof middlewareModule.withRateLimiting).toBe("function");
     expect(typeof middlewareModule.withSecurity).toBe("function");
+    expect(typeof middlewareModule.withValidatedParam).toBe("function");
     expect(typeof middlewareModule.withDefaultMiddleware).toBe("function");
     expect(typeof middlewareModule.withMCPHeader).toBe("function");
   });

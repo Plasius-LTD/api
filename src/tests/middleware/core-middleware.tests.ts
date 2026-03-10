@@ -10,6 +10,7 @@ import { withMCPHeader } from "../../middleware/withMCPHeader.js";
 import { withMiddleware } from "../../middleware/withMiddleware.js";
 import { withSecurity } from "../../middleware/withSecurity.js";
 import { withSession } from "../../middleware/withSession.js";
+import { withValidatedParam } from "../../middleware/withValidatedParam.js";
 
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
 const ORIGINAL_ENFORCE_HTTPS = process.env.ENFORCE_HTTPS;
@@ -280,6 +281,67 @@ describe("withDefaultMiddleware", () => {
     expect(stack).toHaveLength(5);
     expect(stack.at(-1)).toBe(withSession);
     expect(stack.every((mw) => typeof mw === "function")).toBe(true);
+  });
+});
+
+describe("withValidatedParam", () => {
+  it("stores the normalized value in context when validation passes", async () => {
+    const context = createContext();
+    const request = createRequest("GET", "https://api.example.com/resource");
+    request.params = { id: "User-1 " };
+
+    const shouldContinue = await withValidatedParam({
+      paramName: "id",
+      validate: (rawValue) => ({
+        ok: true,
+        value: String(rawValue).trim().toLowerCase(),
+      }),
+    })(request, context);
+
+    expect(shouldContinue).toBe(true);
+    expect(context.extraInputs.get("validated:id")).toBe("user-1");
+  });
+
+  it("short-circuits with a 400 response when validation fails", async () => {
+    const context = createContext();
+    const request = createRequest("GET", "https://api.example.com/resource");
+    request.params = { id: "bad<script>" };
+
+    const shouldContinue = await withValidatedParam({
+      paramName: "id",
+      validate: () => ({
+        ok: false,
+        error: "Invalid id",
+      }),
+    })(request, context);
+    const response = context.extraOutputs.get("http") as HttpResponseInit;
+
+    expect(shouldContinue).toBe(false);
+    expect(response.status).toBe(400);
+    expect(response.jsonBody).toEqual({ error: "Invalid id" });
+  });
+
+  it("allows callers to override the default error response", async () => {
+    const context = createContext();
+    const request = createRequest("GET", "https://api.example.com/resource");
+    request.params = { id: "" };
+
+    const shouldContinue = await withValidatedParam({
+      paramName: "id",
+      validate: () => ({
+        ok: false,
+        error: "Missing id",
+      }),
+      createErrorResponse: (error) => ({
+        status: 422,
+        body: JSON.stringify({ message: error }),
+      }),
+    })(request, context);
+    const response = context.extraOutputs.get("http") as HttpResponseInit;
+
+    expect(shouldContinue).toBe(false);
+    expect(response.status).toBe(422);
+    expect(response.body).toBe(JSON.stringify({ message: "Missing id" }));
   });
 });
 

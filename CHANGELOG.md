@@ -7,10 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 - **Added**
-  - (placeholder)
+  - Generic `withValidatedParam` middleware for reusable route/query ingress validation without embedding application-specific validation policy in `@plasius/api`.
 
 - **Changed**
-  - (placeholder)
+  - Public middleware export surfaces now include `withValidatedParam` from both the package root and `@plasius/api/middleware`.
 
 - **Fixed**
   - (placeholder)

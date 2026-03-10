@@ -7,3 +7,4 @@ export * from "./withSession.js";
 export * from "./withCSRF.js";
 export * from "./withSecurity.js";
 export * from "./withDefaultMiddleware.js";
+export * from "./withValidatedParam.js";

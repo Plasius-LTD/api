@@ -16,6 +16,7 @@ Public generic API helper package.
 - Public helper exports compiled to `dist/**`
 - Reusable transport-security helper utilities
 - Reusable session helper utilities compatible with `withSession` middleware
+- Reusable generic parameter-validation middleware for request ingress checks
 - Governance/legal materials (`docs/**`, `legal/**`)
 
 ## Package Boundary (Public by Design)
@@ -42,6 +43,12 @@ Public generic API helper package.
   - `createSessionCookie(sessionId, options?)`
 - `withSession` middleware is implemented using these helpers and keeps secure defaults (`HttpOnly`, `Secure`, `SameSite=None`, `Path=/`).
 
+## Request Validation Baseline
+
+- Exports helper middleware:
+  - `withValidatedParam({ paramName, validate, contextKey? })`
+- Consumers keep validation policy local by supplying their own validator and normalized value contract.
+
 ## Install
 
 ```bash
@@ -65,6 +72,18 @@ import {
 
 ```ts
 import { withCors, withRateLimiting, withMiddleware } from "@plasius/api/middleware";
+```
+
+```ts
+import { withValidatedParam } from "@plasius/api/middleware";
+
+const requireUserId = withValidatedParam({
+  paramName: "id",
+  validate: (rawValue) =>
+    typeof rawValue === "string" && rawValue.trim()
+      ? { ok: true, value: rawValue.trim() }
+      : { ok: false, error: "Invalid user ID" },
+});
 ```
 
 ## Local development

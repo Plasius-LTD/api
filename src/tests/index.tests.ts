@@ -4,6 +4,7 @@ import {
   withMiddleware,
   withCors,
   withRateLimiting,
+  withValidatedParam,
   ensureSession,
   generatePkceCodeVerifier,
   getCookieSecurity,
@@ -50,5 +51,6 @@ describe("public API helper entrypoint", () => {
     expect(typeof withMiddleware).toBe("function");
     expect(typeof withCors).toBe("function");
     expect(typeof withRateLimiting).toBe("function");
+    expect(typeof withValidatedParam).toBe("function");
   });
 });
