@@ -101,3 +101,9 @@
 
 - Before designing or implementing any new feature, the AI must read and apply [NFR.md](NFR.md).
 - `NFR.md` is the mandatory source of truth for non-functional acceptance criteria for completion.
+
+## Changelog Automation Clarification (Supersedes Manual Release-Entry Editing Only)
+- Prior decision reference: `Software Lifecycle Process`, Step `6.5 Update CHANGELOG.md`, and `Release Quality & Delivery Gates`, Rule `2`.
+- Active rule: when making manual changelog updates, add entries only under `Unreleased`.
+- Active rule: do not manually create, rename, move, or promote versioned/date-based release sections in `CHANGELOG.md`; the release pipeline owns release-entry generation/promotion.
+- Supersession scope: this clarification only overrides manual editing of automated release entries. The requirement to keep changelogs up to date still applies.
