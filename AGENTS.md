@@ -107,3 +107,10 @@
 - Active rule: when making manual changelog updates, add entries only under `Unreleased`.
 - Active rule: do not manually create, rename, move, or promote versioned/date-based release sections in `CHANGELOG.md`; the release pipeline owns release-entry generation/promotion.
 - Supersession scope: this clarification only overrides manual editing of automated release entries. The requirement to keep changelogs up to date still applies.
+
+## Task Claiming Policy
+- Related decision reference: `Release Quality & Delivery Gates`, Rule `8`.
+- Before starting implementation work on any tracked task, claim the task in the Plasius GitHub Project so ownership is visible.
+- Do not claim or begin a task that is already `In Progress`, assigned, or otherwise actively owned by another person.
+- If the needed task is already in progress by another owner, stop and ask the user how to proceed instead of duplicating or competing on the same task.
+- If work is required and no task exists yet, create or request the task before implementation begins.
