@@ -18,7 +18,7 @@ function shouldSkipCsrfValidation(request: HttpRequest): boolean {
     return false;
   }
 
-  let pathname = "";
+  let pathname: string;
   try {
     pathname = normalizePathname(new URL(request.url).pathname);
   } catch {
