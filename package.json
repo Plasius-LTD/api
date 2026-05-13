@@ -1,6 +1,6 @@
 {
   "name": "@plasius/api",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "description": "Generic public API security and middleware helpers.",
   "private": false,
   "main": "./dist/index.js",
