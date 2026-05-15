@@ -13,6 +13,7 @@ const ORIGINAL_REDIS_HOST = process.env.REDIS_HOST;
 const ORIGINAL_REDIS_PORT = process.env.REDIS_PORT;
 const ORIGINAL_REDIS_PASSWORD = process.env.REDIS_PASSWORD;
 const ORIGINAL_RATE_LIMIT_HMAC_SECRET = process.env.RATE_LIMIT_HMAC_SECRET;
+const ORIGINAL_HMAC_SECRET = process.env.HMAC_SECRET;
 const ORIGINAL_RATE_LIMIT_FAIL_OPEN = process.env.RATE_LIMIT_FAIL_OPEN;
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
 
@@ -48,6 +49,7 @@ async function loadWithRateLimiting(
     redisEnabled: boolean;
     redisImplementation?: new (...args: unknown[]) => RedisLike;
     rateLimitSecret?: string;
+    hmacSecret?: string;
     nodeEnv?: string;
     failOpen?: string;
   }
@@ -99,6 +101,11 @@ async function loadWithRateLimiting(
   } else {
     process.env.RATE_LIMIT_HMAC_SECRET = options.rateLimitSecret;
   }
+  if (options.hmacSecret === undefined) {
+    delete process.env.HMAC_SECRET;
+  } else {
+    process.env.HMAC_SECRET = options.hmacSecret;
+  }
 
   return import("../../middleware/withRateLimiting.js");
 }
@@ -133,6 +140,11 @@ afterEach(() => {
     delete process.env.RATE_LIMIT_HMAC_SECRET;
   } else {
     process.env.RATE_LIMIT_HMAC_SECRET = ORIGINAL_RATE_LIMIT_HMAC_SECRET;
+  }
+  if (ORIGINAL_HMAC_SECRET === undefined) {
+    delete process.env.HMAC_SECRET;
+  } else {
+    process.env.HMAC_SECRET = ORIGINAL_HMAC_SECRET;
   }
   if (ORIGINAL_RATE_LIMIT_FAIL_OPEN === undefined) {
     delete process.env.RATE_LIMIT_FAIL_OPEN;
@@ -188,6 +200,63 @@ describe("withRateLimiting", () => {
     expect(shouldContinue).toBe(false);
     expect(response.status).toBe(503);
     expect(String(response.body)).toContain("Rate limiting is temporarily unavailable");
+  });
+
+  it("honors explicit fail-open when redis is disabled in production", async () => {
+    const { withRateLimiting } = await loadWithRateLimiting({
+      redisEnabled: false,
+      nodeEnv: "production",
+    });
+    const middleware = withRateLimiting({
+      global: { limit: 1, windowMs: 1_000 },
+      failOpen: true,
+    });
+
+    const context = createContext();
+    const request = createRequest("POST", "https://api.example.com/admin/flags");
+
+    const shouldContinue = await middleware(request, context);
+
+    expect(shouldContinue).toBe(true);
+    expect(context.extraOutputs.get("http")).toBeUndefined();
+  });
+
+  it("honors RATE_LIMIT_FAIL_OPEN=false outside production", async () => {
+    const { withRateLimiting } = await loadWithRateLimiting({
+      redisEnabled: false,
+      failOpen: "false",
+    });
+    const middleware = withRateLimiting({
+      global: { limit: 1, windowMs: 1_000 },
+    });
+
+    const context = createContext();
+    const request = createRequest("POST", "https://api.example.com/admin/flags");
+
+    const shouldContinue = await middleware(request, context);
+    const response = context.extraOutputs.get("http") as HttpResponseInit;
+
+    expect(shouldContinue).toBe(false);
+    expect(response.status).toBe(503);
+  });
+
+  it("honors RATE_LIMIT_FAIL_OPEN=true in production", async () => {
+    const { withRateLimiting } = await loadWithRateLimiting({
+      redisEnabled: false,
+      nodeEnv: "production",
+      failOpen: "true",
+    });
+    const middleware = withRateLimiting({
+      global: { limit: 1, windowMs: 1_000 },
+    });
+
+    const context = createContext();
+    const request = createRequest("POST", "https://api.example.com/admin/flags");
+
+    const shouldContinue = await middleware(request, context);
+
+    expect(shouldContinue).toBe(true);
+    expect(context.extraOutputs.get("http")).toBeUndefined();
   });
 
   it("blocks requests when global limit is exceeded", async () => {
@@ -272,6 +341,175 @@ describe("withRateLimiting", () => {
     expect(observedKeys[0]).not.toContain("203.0.113.10");
   });
 
+  it("uses authenticated context principals for per-user Redis keys", async () => {
+    const observedKeys: string[] = [];
+
+    class CapturingRedis {
+      async incr(key: string) {
+        observedKeys.push(key);
+        return 1;
+      }
+      async pexpire() {
+        return 1;
+      }
+      async pttl() {
+        return 2500;
+      }
+    }
+
+    const { withRateLimiting } = await loadWithRateLimiting({
+      redisEnabled: true,
+      redisImplementation: CapturingRedis as unknown as new (...args: unknown[]) => RedisLike,
+    });
+    const middleware = withRateLimiting({
+      perUser: { limit: 5, windowMs: 1_000 },
+    });
+
+    const context = createContext();
+    context.extraInputs.set("user", {
+      sub: "user-subject-123",
+    });
+    const request = createRequest("POST", "https://api.example.com/resource", {
+      authorization: "Bearer raw-token-value",
+    });
+
+    await middleware(request, context);
+
+    expect(observedKeys).toHaveLength(1);
+    expect(observedKeys[0]).toContain("rate:user:principal:");
+    expect(observedKeys[0]).not.toContain("user-subject-123");
+    expect(observedKeys[0]).not.toContain("raw-token-value");
+  });
+
+  it("uses trusted proxy IPs for anonymous per-user Redis keys only when configured", async () => {
+    const observedKeys: string[] = [];
+
+    class CapturingRedis {
+      async incr(key: string) {
+        observedKeys.push(key);
+        return 1;
+      }
+      async pexpire() {
+        return 1;
+      }
+      async pttl() {
+        return 2500;
+      }
+    }
+
+    const { withRateLimiting } = await loadWithRateLimiting({
+      redisEnabled: true,
+      redisImplementation: CapturingRedis as unknown as new (...args: unknown[]) => RedisLike,
+    });
+    const middleware = withRateLimiting({
+      perUser: { limit: 5, windowMs: 1_000 },
+      trustProxyHeaders: true,
+    });
+
+    const context = createContext();
+    const request = createRequest("POST", "https://api.example.com/resource", {
+      "x-forwarded-for": "203.0.113.10, 203.0.113.11",
+    });
+
+    await middleware(request, context);
+
+    expect(observedKeys).toHaveLength(1);
+    expect(observedKeys[0]).toContain("rate:user:ip:");
+    expect(observedKeys[0]).not.toContain("203.0.113.10");
+  });
+
+  it("falls back to x-real-ip when trusted forwarded-for is blank", async () => {
+    const observedKeys: string[] = [];
+
+    class CapturingRedis {
+      async incr(key: string) {
+        observedKeys.push(key);
+        return 1;
+      }
+      async pexpire() {
+        return 1;
+      }
+      async pttl() {
+        return 2500;
+      }
+    }
+
+    const { withRateLimiting } = await loadWithRateLimiting({
+      redisEnabled: true,
+      redisImplementation: CapturingRedis as unknown as new (...args: unknown[]) => RedisLike,
+    });
+    const middleware = withRateLimiting({
+      perUser: { limit: 5, windowMs: 1_000 },
+      trustProxyHeaders: true,
+    });
+
+    const context = createContext();
+    const request = createRequest("POST", "https://api.example.com/resource", {
+      "x-forwarded-for": "   ",
+      "x-real-ip": "198.51.100.20",
+    });
+
+    await middleware(request, context);
+
+    expect(observedKeys).toHaveLength(1);
+    expect(observedKeys[0]).toContain("rate:user:ip:");
+    expect(observedKeys[0]).not.toContain("198.51.100.20");
+  });
+
+  it("requires a configured HMAC secret before deriving privacy-safe per-user keys", async () => {
+    const { withRateLimiting } = await loadWithRateLimiting({
+      redisEnabled: true,
+      rateLimitSecret: "",
+    });
+    const middleware = withRateLimiting({
+      perUser: { limit: 5, windowMs: 1_000 },
+    });
+
+    const context = createContext();
+    const request = createRequest("POST", "https://api.example.com/resource", {
+      authorization: "Bearer raw-token-value",
+    });
+
+    await expect(middleware(request, context)).rejects.toThrow(/RATE_LIMIT_HMAC_SECRET/);
+  });
+
+  it("falls back to the shared HMAC secret for privacy-safe per-user keys", async () => {
+    const observedKeys: string[] = [];
+
+    class CapturingRedis {
+      async incr(key: string) {
+        observedKeys.push(key);
+        return 1;
+      }
+      async pexpire() {
+        return 1;
+      }
+      async pttl() {
+        return 2500;
+      }
+    }
+
+    const { withRateLimiting } = await loadWithRateLimiting({
+      redisEnabled: true,
+      rateLimitSecret: "",
+      hmacSecret: "shared-hmac-secret",
+      redisImplementation: CapturingRedis as unknown as new (...args: unknown[]) => RedisLike,
+    });
+    const middleware = withRateLimiting({
+      perUser: { limit: 5, windowMs: 1_000 },
+    });
+
+    const context = createContext();
+    const request = createRequest("POST", "https://api.example.com/resource", {
+      authorization: "Bearer raw-token-value",
+    });
+
+    await middleware(request, context);
+
+    expect(observedKeys).toHaveLength(1);
+    expect(observedKeys[0]).toContain("rate:user:auth:");
+  });
+
   it("blocks requests when per-api limit is exceeded", async () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     const { withRateLimiting } = await loadWithRateLimiting({ redisEnabled: true });
@@ -325,6 +563,39 @@ describe("withRateLimiting", () => {
       warn: ReturnType<typeof vi.fn>;
     };
     expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("Bearer"));
+    nowSpy.mockRestore();
+  });
+
+  it("can fail open when redis backend throws and failOpen is explicit", async () => {
+    class ThrowingRedis {
+      async incr() {
+        throw new Error("redis unavailable");
+      }
+      async pexpire() {
+        return 1;
+      }
+      async pttl() {
+        return 2500;
+      }
+    }
+
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const { withRateLimiting } = await loadWithRateLimiting({
+      redisEnabled: true,
+      nodeEnv: "production",
+      redisImplementation: ThrowingRedis as unknown as new (...args: unknown[]) => RedisLike,
+    });
+    const middleware = withRateLimiting({
+      global: { limit: 1, windowMs: 1_000 },
+      failOpen: true,
+    });
+
+    const context = createContext();
+    const request = createRequest("GET", "https://api.example.com/resource");
+    const shouldContinue = await middleware(request, context);
+
+    expect(shouldContinue).toBe(true);
+    expect(context.extraOutputs.get("http")).toBeUndefined();
     nowSpy.mockRestore();
   });
 });
