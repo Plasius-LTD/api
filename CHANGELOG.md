@@ -16,7 +16,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - (placeholder)
 
 - **Security**
-  - (placeholder)
+  - Hardened shared CORS defaults so credentialed requests require an explicit trusted origin and wildcard CORS cannot be combined with credentials.
+  - Removed the OAuth refresh-token CSRF bypass from the shared CSRF middleware.
+  - Reworked rate-limit identity keys and logs so raw bearer tokens, forwarded IPs, and client-supplied user IDs are not stored or logged.
+  - Removed the hard-coded IP hashing HMAC fallback; deployments must configure `HMAC_SECRET`.
+  - Made cookie base URL resolution prefer configured deployment origins, gated forwarded-header use behind `TRUST_PROXY_HEADERS`, and defaulted auth cookies to `SameSite=Lax` unless explicitly configured.
+  - Changed shared request logging to record path-only URLs so query tokens are not written to logs.
+  - Made production rate limiting fail closed when Redis is disabled or unavailable unless `RATE_LIMIT_FAIL_OPEN=true` is explicitly configured.
 
 ## [1.0.14] - 2026-05-13
 

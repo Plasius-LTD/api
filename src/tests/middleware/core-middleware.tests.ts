@@ -1,5 +1,5 @@
 import type { HttpRequest, HttpResponseInit, InvocationContext } from "@azure/functions";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as middlewareExports from "../../middleware/index.js";
 import { withCors } from "../../middleware/withCors.js";
@@ -14,6 +14,11 @@ import { withValidatedParam } from "../../middleware/withValidatedParam.js";
 
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
 const ORIGINAL_ENFORCE_HTTPS = process.env.ENFORCE_HTTPS;
+const ORIGINAL_HMAC_SECRET = process.env.HMAC_SECRET;
+const ORIGINAL_CORS_ALLOWED_ORIGINS = process.env.CORS_ALLOWED_ORIGINS;
+const ORIGINAL_AUTH_COOKIE_SAME_SITE = process.env.AUTH_COOKIE_SAME_SITE;
+const ORIGINAL_PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL;
+const ORIGINAL_TRUST_PROXY_HEADERS = process.env.TRUST_PROXY_HEADERS;
 
 function createContext(): InvocationContext {
   const context = {
@@ -45,12 +50,41 @@ function createRequest(
   } as unknown as HttpRequest;
 }
 
+beforeEach(() => {
+  process.env.HMAC_SECRET = "test-hmac-secret";
+});
+
 afterEach(() => {
   process.env.NODE_ENV = ORIGINAL_NODE_ENV;
   if (ORIGINAL_ENFORCE_HTTPS === undefined) {
     delete process.env.ENFORCE_HTTPS;
   } else {
     process.env.ENFORCE_HTTPS = ORIGINAL_ENFORCE_HTTPS;
+  }
+  if (ORIGINAL_HMAC_SECRET === undefined) {
+    delete process.env.HMAC_SECRET;
+  } else {
+    process.env.HMAC_SECRET = ORIGINAL_HMAC_SECRET;
+  }
+  if (ORIGINAL_CORS_ALLOWED_ORIGINS === undefined) {
+    delete process.env.CORS_ALLOWED_ORIGINS;
+  } else {
+    process.env.CORS_ALLOWED_ORIGINS = ORIGINAL_CORS_ALLOWED_ORIGINS;
+  }
+  if (ORIGINAL_AUTH_COOKIE_SAME_SITE === undefined) {
+    delete process.env.AUTH_COOKIE_SAME_SITE;
+  } else {
+    process.env.AUTH_COOKIE_SAME_SITE = ORIGINAL_AUTH_COOKIE_SAME_SITE;
+  }
+  if (ORIGINAL_PUBLIC_BASE_URL === undefined) {
+    delete process.env.PUBLIC_BASE_URL;
+  } else {
+    process.env.PUBLIC_BASE_URL = ORIGINAL_PUBLIC_BASE_URL;
+  }
+  if (ORIGINAL_TRUST_PROXY_HEADERS === undefined) {
+    delete process.env.TRUST_PROXY_HEADERS;
+  } else {
+    process.env.TRUST_PROXY_HEADERS = ORIGINAL_TRUST_PROXY_HEADERS;
   }
   vi.restoreAllMocks();
 });
@@ -95,6 +129,39 @@ describe("withCors", () => {
 
     expect(shouldContinue).toBe(true);
     expect(headers.get("Access-Control-Allow-Origin")).toBe("null");
+    expect(headers.get("Access-Control-Allow-Credentials")).toBeNull();
+  });
+
+  it("does not reflect wildcard origins when credentials are enabled", async () => {
+    const middleware = withCors(["*"]);
+    const context = createContext();
+    const request = createRequest("GET", "https://api.example.com/resource", {
+      origin: "https://attacker.example",
+    });
+
+    const shouldContinue = await middleware(request, context);
+    const headers = context.extraOutputs.get("headers") as Headers;
+
+    expect(shouldContinue).toBe(true);
+    expect(headers.get("Access-Control-Allow-Origin")).toBe("null");
+    expect(headers.get("Access-Control-Allow-Credentials")).toBeNull();
+  });
+
+  it("allows public wildcard CORS only when credentials are disabled", async () => {
+    const middleware = withCors(["*"], undefined, undefined, {
+      allowCredentials: false,
+    });
+    const context = createContext();
+    const request = createRequest("GET", "https://api.example.com/resource", {
+      origin: "https://public.example",
+    });
+
+    const shouldContinue = await middleware(request, context);
+    const headers = context.extraOutputs.get("headers") as Headers;
+
+    expect(shouldContinue).toBe(true);
+    expect(headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(headers.get("Access-Control-Allow-Credentials")).toBeNull();
   });
 });
 
@@ -112,7 +179,7 @@ describe("withCSRF", () => {
       name: "csrf-token",
       value: expect.any(String),
       secure: true,
-      sameSite: "None",
+      sameSite: "Lax",
     });
   });
 
@@ -132,6 +199,25 @@ describe("withCSRF", () => {
       value: expect.any(String),
       secure: false,
       sameSite: "Lax",
+    });
+  });
+
+  it("allows explicit cross-site csrf cookies only when configured on https", async () => {
+    process.env.AUTH_COOKIE_SAME_SITE = "None";
+    const context = createContext();
+    const request = createRequest("GET", "https://api.example.com/resource", {
+      origin: "http://attacker.example",
+      "x-forwarded-proto": "http",
+      "x-forwarded-host": "attacker.example",
+    });
+
+    const shouldContinue = await withCSRF()(request, context);
+    const cookies = context.extraOutputs.get("cookies") as Array<Record<string, unknown>>;
+
+    expect(shouldContinue).toBe(true);
+    expect(cookies[0]).toMatchObject({
+      secure: true,
+      sameSite: "None",
     });
   });
 
@@ -162,17 +248,18 @@ describe("withCSRF", () => {
     expect(context.extraOutputs.get("http")).toBeUndefined();
   });
 
-  it("skips csrf validation for the refresh-token route", async () => {
+  it("blocks refresh-token writes without csrf validation", async () => {
     const context = createContext();
     const request = createRequest("POST", "https://api.example.com/api/oauth/refresh-token");
 
     const shouldContinue = await withCSRF()(request, context);
+    const http = context.extraOutputs.get("http") as HttpResponseInit;
 
-    expect(shouldContinue).toBe(true);
-    expect(context.extraOutputs.get("http")).toBeUndefined();
+    expect(shouldContinue).toBe(false);
+    expect(http.status).toBe(403);
   });
 
-  it("skips csrf validation for normalized refresh-token route variants", async () => {
+  it("blocks normalized refresh-token route variants without csrf validation", async () => {
     const context = createContext();
     const request = createRequest(
       "POST",
@@ -180,9 +267,10 @@ describe("withCSRF", () => {
     );
 
     const shouldContinue = await withCSRF()(request, context);
+    const http = context.extraOutputs.get("http") as HttpResponseInit;
 
-    expect(shouldContinue).toBe(true);
-    expect(context.extraOutputs.get("http")).toBeUndefined();
+    expect(shouldContinue).toBe(false);
+    expect(http.status).toBe(403);
   });
 });
 
@@ -224,7 +312,7 @@ describe("withSecurity", () => {
 describe("withLogging", () => {
   it("injects prefixed logger helpers into context", async () => {
     const context = createContext();
-    const request = createRequest("PATCH", "https://api.example.com/users/1");
+    const request = createRequest("PATCH", "https://api.example.com/users/1?token=secret");
 
     const shouldContinue = await withLogging(request, context);
     const logger = context.extraInputs.get("logger") as {
@@ -239,13 +327,16 @@ describe("withLogging", () => {
 
     expect(shouldContinue).toBe(true);
     expect(context.log).toHaveBeenCalledWith(
-      expect.stringContaining("PATCH https://api.example.com/users/1 one")
+      expect.stringContaining("PATCH /users/1 one")
     );
     expect(context.warn).toHaveBeenCalledWith(
-      expect.stringContaining("PATCH https://api.example.com/users/1 two")
+      expect.stringContaining("PATCH /users/1 two")
     );
     expect(context.error).toHaveBeenCalledWith(
-      expect.stringContaining("PATCH https://api.example.com/users/1 three")
+      expect.stringContaining("PATCH /users/1 three")
+    );
+    expect(context.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("token=secret")
     );
   });
 });
@@ -281,6 +372,28 @@ describe("withDefaultMiddleware", () => {
     expect(stack).toHaveLength(5);
     expect(stack.at(-1)).toBe(withSession);
     expect(stack.every((mw) => typeof mw === "function")).toBe(true);
+  });
+
+  it("uses configured origins and excludes forbidden request headers", async () => {
+    process.env.CORS_ALLOWED_ORIGINS = "https://app.example";
+    const stack = withDefaultMiddleware();
+    const cors = stack[2];
+    const context = createContext();
+    const request = createRequest("OPTIONS", "https://api.example.com/resource", {
+      origin: "https://app.example",
+    });
+
+    const shouldContinue = await cors(request, context);
+    const http = context.extraOutputs.get("http") as HttpResponseInit;
+    const headers = http.headers as Headers;
+    const allowedHeaders = headers.get("Access-Control-Allow-Headers") ?? "";
+
+    expect(shouldContinue).toBe(false);
+    expect(headers.get("Access-Control-Allow-Origin")).toBe("https://app.example");
+    expect(headers.get("Access-Control-Allow-Credentials")).toBe("true");
+    expect(allowedHeaders).not.toContain("Cookie");
+    expect(allowedHeaders).not.toContain("Set-Cookie");
+    expect(allowedHeaders).not.toContain("X-Forwarded-For");
   });
 });
 

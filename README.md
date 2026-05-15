@@ -41,13 +41,23 @@ Public generic API helper package.
   - `ensureSession(request, options?)`
   - `getSessionIdFromRequest(request, cookieName?)`
   - `createSessionCookie(sessionId, options?)`
-- `withSession` middleware is implemented using these helpers and keeps secure defaults (`HttpOnly`, `Secure`, `SameSite=None`, `Path=/`).
+- `withSession` middleware is implemented using these helpers and keeps secure defaults (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`).
 
 ## Request Validation Baseline
 
 - Exports helper middleware:
   - `withValidatedParam({ paramName, validate, contextKey? })`
 - Consumers keep validation policy local by supplying their own validator and normalized value contract.
+
+## Security Configuration
+
+- `CORS_ALLOWED_ORIGINS` or `ALLOWED_ORIGINS`: comma-separated trusted browser origins for credentialed CORS. Credentialed wildcard CORS is rejected by default.
+- `HMAC_SECRET`: required before request IP addresses are hashed for privacy-preserving request logs.
+- `RATE_LIMIT_HMAC_SECRET`: required for rate-limit identity hashing. If omitted, `HMAC_SECRET` is used.
+- `AUTH_COOKIE_SAME_SITE` or `COOKIE_SAME_SITE`: optional cookie `SameSite` override. Defaults to `Lax`; use `None` only for HTTPS deployments that genuinely require cross-site cookies.
+- `PUBLIC_BASE_URL`, `FRONTEND_DOMAIN`, or `DOMAIN`: configured deployment origin used before request-derived URL data for cookie security decisions.
+- `TRUST_PROXY_HEADERS`: opt-in flag for using forwarded host/proto/IP headers. Leave unset unless the deployment edge strips and rewrites those headers.
+- `RATE_LIMIT_FAIL_OPEN`: optional override for production rate-limit backend outages. Production fails closed by default.
 
 ## Install
 

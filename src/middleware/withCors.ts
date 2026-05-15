@@ -1,9 +1,13 @@
 import { HttpRequest, InvocationContext } from "@azure/functions";
 import { Middleware } from "./withMiddleware.js";
-import { getExtraOutputs } from "../utils/index.js";
+import { getExtraOutputs, resolveRequestPath } from "../utils/index.js";
+
+export interface CorsOptions {
+  allowCredentials?: boolean;
+}
 
 export function withCors(
-  allowedOrigins: string[] = ["*"],
+  allowedOrigins: string[] = [],
   allowedMethods: string[] = [
     "GET",
     "POST",
@@ -13,7 +17,8 @@ export function withCors(
     "OPTIONS",
     "HEAD",
   ],
-  allowedHeaders: string[] = ["Content-Type", "Authorization"]
+  allowedHeaders: string[] = ["Content-Type", "Authorization"],
+  options: CorsOptions = {}
 ): Middleware {
   return async (req: HttpRequest, context: InvocationContext) => {
     const logger = context.extraInputs.get("logger") as {
@@ -23,23 +28,39 @@ export function withCors(
     };
 
     const { headers, cookies } = getExtraOutputs(context);
-    logger?.log(`[withCors] Executing middleware for ${req.method} ${req.url}`);
+    logger?.log(`[withCors] Executing middleware for ${req.method} ${resolveRequestPath(req.url)}`);
 
-    const origin = req.headers.get("origin") ?? "*";
-    const isOriginAllowed =
-      allowedOrigins.includes("*") || allowedOrigins.includes(origin);
+    const origin = req.headers.get("origin");
+    const allowCredentials = options.allowCredentials ?? true;
+    const hasWildcardOrigin = allowedOrigins.includes("*");
+    const isSpecificOriginAllowed =
+      origin !== null && allowedOrigins.includes(origin);
+    const isOriginAllowed = hasWildcardOrigin
+      ? !allowCredentials
+      : isSpecificOriginAllowed;
 
     if (!isOriginAllowed) {
-      logger?.warn(`CORS blocked request from origin: ${origin}`);
+      logger?.warn(`CORS blocked request from origin: ${origin ?? "none"}`);
     }
+
+    const allowOrigin = hasWildcardOrigin && !allowCredentials
+      ? "*"
+      : isSpecificOriginAllowed
+        ? origin
+        : "null";
 
     headers.set(
       "Access-Control-Allow-Origin",
-      isOriginAllowed ? origin : "null"
+      allowOrigin
     );
     headers.set("Access-Control-Allow-Methods", allowedMethods.join(", "));
     headers.set("Access-Control-Allow-Headers", allowedHeaders.join(", "));
-    headers.set("Access-Control-Allow-Credentials", "true");
+    headers.set("Vary", "Origin");
+    if (allowCredentials && isSpecificOriginAllowed) {
+      headers.set("Access-Control-Allow-Credentials", "true");
+    } else {
+      headers.delete("Access-Control-Allow-Credentials");
+    }
     headers.set("Referrer-Policy", "origin-when-cross-origin");
 
     context.extraOutputs.set("headers", headers);
@@ -56,4 +77,4 @@ export function withCors(
 
     return true;
   };
-} 
+}
