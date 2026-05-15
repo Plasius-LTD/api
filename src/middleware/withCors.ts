@@ -1,6 +1,6 @@
 import { HttpRequest, InvocationContext } from "@azure/functions";
 import { Middleware } from "./withMiddleware.js";
-import { getExtraOutputs } from "../utils/index.js";
+import { getExtraOutputs, resolveRequestPath } from "../utils/index.js";
 
 export interface CorsOptions {
   allowCredentials?: boolean;
@@ -28,7 +28,7 @@ export function withCors(
     };
 
     const { headers, cookies } = getExtraOutputs(context);
-    logger?.log(`[withCors] Executing middleware for ${req.method} ${req.url}`);
+    logger?.log(`[withCors] Executing middleware for ${req.method} ${resolveRequestPath(req.url)}`);
 
     const origin = req.headers.get("origin");
     const allowCredentials = options.allowCredentials ?? true;

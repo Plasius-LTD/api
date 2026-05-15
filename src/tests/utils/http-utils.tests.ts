@@ -16,6 +16,7 @@ function createRequest(headers: Record<string, string> = {}): HttpRequest {
 }
 
 const ORIGINAL_HMAC_SECRET = process.env.HMAC_SECRET;
+const ORIGINAL_TRUST_PROXY_HEADERS = process.env.TRUST_PROXY_HEADERS;
 
 beforeEach(() => {
   process.env.HMAC_SECRET = "test-ip-hash-secret";
@@ -26,6 +27,11 @@ afterEach(() => {
     delete process.env.HMAC_SECRET;
   } else {
     process.env.HMAC_SECRET = ORIGINAL_HMAC_SECRET;
+  }
+  if (ORIGINAL_TRUST_PROXY_HEADERS === undefined) {
+    delete process.env.TRUST_PROXY_HEADERS;
+  } else {
+    process.env.TRUST_PROXY_HEADERS = ORIGINAL_TRUST_PROXY_HEADERS;
   }
 });
 
@@ -93,7 +99,8 @@ describe("request context helpers", () => {
 });
 
 describe("IP hashing helper", () => {
-  it("hashes the first forwarded IP when x-forwarded-for is present", () => {
+  it("hashes the first forwarded IP only when proxy headers are trusted", () => {
+    process.env.TRUST_PROXY_HEADERS = "true";
     const request = createRequest({
       "x-forwarded-for": "203.0.113.10, 203.0.113.11",
     });
@@ -109,15 +116,22 @@ describe("IP hashing helper", () => {
     expect(hash).toBe(expected);
   });
 
-  it("falls back to host then unknown when client ip headers are absent", () => {
-    const withHost = createRequest({ host: "api.internal.local" });
-    const withoutHost = createRequest();
+  it("ignores spoofable client IP headers unless proxy headers are trusted", () => {
+    const spoofed = createRequest({
+      "x-forwarded-for": "203.0.113.10",
+      "x-client-ip": "198.51.100.7",
+      host: "api.internal.local",
+    });
+    const withoutHeaders = createRequest();
 
-    const withHostHash = extractAndHashClientIp(withHost);
-    const unknownHash = extractAndHashClientIp(withoutHost);
+    const spoofedHash = extractAndHashClientIp(spoofed);
+    const unknownHash = extractAndHashClientIp(withoutHeaders);
+    const expected = createHmac("sha256", "test-ip-hash-secret")
+      .update("unknown")
+      .digest("hex");
 
-    expect(withHostHash).not.toBe(unknownHash);
-    expect(withHostHash).toHaveLength(64);
+    expect(spoofedHash).toBe(expected);
+    expect(spoofedHash).toBe(unknownHash);
     expect(unknownHash).toHaveLength(64);
   });
 

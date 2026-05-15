@@ -1,12 +1,13 @@
 import { HttpRequest, InvocationContext } from "@azure/functions";
 import { Middleware } from "./withMiddleware.js";
+import { resolveRequestPath } from "../utils/index.js";
 
 export const withLogging: Middleware = async (
   req: HttpRequest,
   context: InvocationContext
 ) => {
   const method = req.method;
-  const path = req.url;
+  const path = resolveRequestPath(req.url);
 
   const prefix = `${method} ${path} `;
 

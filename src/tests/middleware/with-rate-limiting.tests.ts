@@ -13,6 +13,8 @@ const ORIGINAL_REDIS_HOST = process.env.REDIS_HOST;
 const ORIGINAL_REDIS_PORT = process.env.REDIS_PORT;
 const ORIGINAL_REDIS_PASSWORD = process.env.REDIS_PASSWORD;
 const ORIGINAL_RATE_LIMIT_HMAC_SECRET = process.env.RATE_LIMIT_HMAC_SECRET;
+const ORIGINAL_RATE_LIMIT_FAIL_OPEN = process.env.RATE_LIMIT_FAIL_OPEN;
+const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
 
 function createContext(): InvocationContext {
   const context = {
@@ -46,6 +48,8 @@ async function loadWithRateLimiting(
     redisEnabled: boolean;
     redisImplementation?: new (...args: unknown[]) => RedisLike;
     rateLimitSecret?: string;
+    nodeEnv?: string;
+    failOpen?: string;
   }
 ) {
   vi.resetModules();
@@ -70,6 +74,16 @@ async function loadWithRateLimiting(
   });
 
   process.env.REDIS_ENABLED = options.redisEnabled ? "true" : "false";
+  if (options.nodeEnv === undefined) {
+    delete process.env.NODE_ENV;
+  } else {
+    process.env.NODE_ENV = options.nodeEnv;
+  }
+  if (options.failOpen === undefined) {
+    delete process.env.RATE_LIMIT_FAIL_OPEN;
+  } else {
+    process.env.RATE_LIMIT_FAIL_OPEN = options.failOpen;
+  }
   if (options.redisEnabled) {
     process.env.REDIS_URL = "redis://127.0.0.1:6379";
   } else {
@@ -120,6 +134,16 @@ afterEach(() => {
   } else {
     process.env.RATE_LIMIT_HMAC_SECRET = ORIGINAL_RATE_LIMIT_HMAC_SECRET;
   }
+  if (ORIGINAL_RATE_LIMIT_FAIL_OPEN === undefined) {
+    delete process.env.RATE_LIMIT_FAIL_OPEN;
+  } else {
+    process.env.RATE_LIMIT_FAIL_OPEN = ORIGINAL_RATE_LIMIT_FAIL_OPEN;
+  }
+  if (ORIGINAL_NODE_ENV === undefined) {
+    delete process.env.NODE_ENV;
+  } else {
+    process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+  }
 
   vi.restoreAllMocks();
   vi.resetModules();
@@ -144,6 +168,26 @@ describe("withRateLimiting", () => {
 
     expect(shouldContinue).toBe(true);
     expect(context.extraOutputs.get("http")).toBeUndefined();
+  });
+
+  it("fails closed in production when redis is disabled", async () => {
+    const { withRateLimiting } = await loadWithRateLimiting({
+      redisEnabled: false,
+      nodeEnv: "production",
+    });
+    const middleware = withRateLimiting({
+      global: { limit: 1, windowMs: 1_000 },
+    });
+
+    const context = createContext();
+    const request = createRequest("POST", "https://api.example.com/admin/flags");
+
+    const shouldContinue = await middleware(request, context);
+    const response = context.extraOutputs.get("http") as HttpResponseInit;
+
+    expect(shouldContinue).toBe(false);
+    expect(response.status).toBe(503);
+    expect(String(response.body)).toContain("Rate limiting is temporarily unavailable");
   });
 
   it("blocks requests when global limit is exceeded", async () => {
@@ -247,7 +291,7 @@ describe("withRateLimiting", () => {
     nowSpy.mockRestore();
   });
 
-  it("fails open when redis backend throws", async () => {
+  it("fails closed in production when redis backend throws", async () => {
     class ThrowingRedis {
       async incr() {
         throw new Error("redis unavailable");
@@ -263,6 +307,7 @@ describe("withRateLimiting", () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     const { withRateLimiting } = await loadWithRateLimiting({
       redisEnabled: true,
+      nodeEnv: "production",
       redisImplementation: ThrowingRedis as unknown as new (...args: unknown[]) => RedisLike,
     });
     const middleware = withRateLimiting({
@@ -272,9 +317,10 @@ describe("withRateLimiting", () => {
     const context = createContext();
     const request = createRequest("GET", "https://api.example.com/resource");
     const shouldContinue = await middleware(request, context);
+    const response = context.extraOutputs.get("http") as HttpResponseInit;
 
-    expect(shouldContinue).toBe(true);
-    expect(context.extraOutputs.get("http")).toBeUndefined();
+    expect(shouldContinue).toBe(false);
+    expect(response.status).toBe(503);
     const logger = context.extraInputs.get("logger") as {
       warn: ReturnType<typeof vi.fn>;
     };

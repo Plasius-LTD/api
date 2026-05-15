@@ -13,6 +13,7 @@ export interface ApiRateLimiterConfig {
   perUser?: RateLimitConfig;
   perApi?: RateLimitConfig;
   trustProxyHeaders?: boolean;
+  failOpen?: boolean;
 }
 
 const redisUrl = process.env.REDIS_URL?.trim();
@@ -67,6 +68,22 @@ function shouldTrustProxyHeaders(config: ApiRateLimiterConfig): boolean {
     config.trustProxyHeaders ??
     (process.env.TRUST_PROXY_HEADERS ?? "false").toLowerCase() === "true"
   );
+}
+
+function shouldFailOpen(config: ApiRateLimiterConfig): boolean {
+  if (config.failOpen !== undefined) {
+    return config.failOpen;
+  }
+
+  const configured = process.env.RATE_LIMIT_FAIL_OPEN?.trim().toLowerCase();
+  if (configured === "true") {
+    return true;
+  }
+  if (configured === "false") {
+    return false;
+  }
+
+  return process.env.NODE_ENV !== "production";
 }
 
 function createPerUserRateLimitKey(
@@ -125,6 +142,7 @@ function getRedisClient(): Redis | null {
 async function checkRateLimit(
   key: string,
   config: RateLimitConfig,
+  limiterConfig: ApiRateLimiterConfig,
   context: InvocationContext,
   label: string
 ): Promise<{
@@ -132,6 +150,7 @@ async function checkRateLimit(
   remaining: number;
   retryAfter?: number;
   reset: number;
+  unavailable?: boolean;
 }> {
   const logger = context.extraInputs.get("logger") as {
     log: (...args: any[]) => void;
@@ -143,11 +162,22 @@ async function checkRateLimit(
 
   const redis = getRedisClient();
   if (!redis) {
-    logger?.log(`Rate limiting bypassed for ${label} (Redis disabled)`);
+    if (shouldFailOpen(limiterConfig)) {
+      logger?.log(`Rate limiting bypassed for ${label} (Redis disabled)`);
+      return {
+        allowed: true,
+        remaining: config.limit,
+        reset: Math.ceil((now + config.windowMs) / 1000),
+      };
+    }
+
+    logger?.warn(`Rate limiting unavailable for ${label} (Redis disabled); rejecting request.`);
     return {
-      allowed: true,
-      remaining: config.limit,
+      allowed: false,
+      remaining: 0,
+      retryAfter: Math.ceil(config.windowMs / 1000),
       reset: Math.ceil((now + config.windowMs) / 1000),
+      unavailable: true,
     };
   }
 
@@ -169,14 +199,36 @@ async function checkRateLimit(
 
     return { allowed: true, remaining, reset };
   } catch (error: unknown) {
-    logger?.warn(`Rate limit backend unavailable for ${label}; allowing request.`);
+    if (shouldFailOpen(limiterConfig)) {
+      logger?.warn(`Rate limit backend unavailable for ${label}; allowing request.`);
+      logger?.warn(error);
+      return {
+        allowed: true,
+        remaining: config.limit,
+        reset: Math.ceil((now + config.windowMs) / 1000),
+      };
+    }
+
+    logger?.warn(`Rate limit backend unavailable for ${label}; rejecting request.`);
     logger?.warn(error);
     return {
-      allowed: true,
-      remaining: config.limit,
+      allowed: false,
+      remaining: 0,
+      retryAfter: Math.ceil(config.windowMs / 1000),
       reset: Math.ceil((now + config.windowMs) / 1000),
+      unavailable: true,
     };
   }
+}
+
+function rateLimitStatus(result: { unavailable?: boolean }): number {
+  return result.unavailable ? 503 : 429;
+}
+
+function rateLimitBody(result: { unavailable?: boolean }, limitedBody: string): string {
+  return result.unavailable
+    ? "Rate limiting is temporarily unavailable. Please retry later."
+    : limitedBody;
 }
 
 export function withRateLimiting(config: ApiRateLimiterConfig): Middleware {
@@ -188,13 +240,14 @@ export function withRateLimiting(config: ApiRateLimiterConfig): Middleware {
       const result = await checkRateLimit(
         "rate:global",
         config.global,
+        config,
         context,
         "global"
       );
       if (!result.allowed) {
         context.extraOutputs.set("http", {
-          status: 429,
-          body: "Server is busy (global limit). Please retry later.",
+          status: rateLimitStatus(result),
+          body: rateLimitBody(result, "Server is busy (global limit). Please retry later."),
           headers: {
             "Retry-After": result.retryAfter?.toString(),
             "X-RateLimit-Limit": config.global.limit.toString(),
@@ -211,13 +264,14 @@ export function withRateLimiting(config: ApiRateLimiterConfig): Middleware {
       const result = await checkRateLimit(
         createPerUserRateLimitKey(req, context, config),
         config.perUser,
+        config,
         context,
         "user"
       );
       if (!result.allowed) {
         context.extraOutputs.set("http", {
-          status: 429,
-          body: "You are sending requests too fast (user limit). Please retry later.",
+          status: rateLimitStatus(result),
+          body: rateLimitBody(result, "You are sending requests too fast (user limit). Please retry later."),
           headers: {
             "Retry-After": result.retryAfter?.toString(),
             "X-RateLimit-Limit": config.perUser.limit.toString(),
@@ -235,13 +289,14 @@ export function withRateLimiting(config: ApiRateLimiterConfig): Middleware {
       const result = await checkRateLimit(
         `rate:api:${apiKey}`,
         config.perApi,
+        config,
         context,
         "api"
       );
       if (!result.allowed) {
         context.extraOutputs.set("http", {
-          status: 429,
-          body: "This API is receiving too many requests. Please retry later.",
+          status: rateLimitStatus(result),
+          body: rateLimitBody(result, "This API is receiving too many requests. Please retry later."),
           headers: {
             "Retry-After": result.retryAfter?.toString(),
             "X-RateLimit-Limit": config.perApi.limit.toString(),

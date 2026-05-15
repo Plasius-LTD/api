@@ -1,6 +1,6 @@
 import type { HttpRequest, HttpResponseInit, InvocationContext } from "@azure/functions";
 import { withLogging } from "./withLogging";
-import { extractAndHashClientIp, getExtraOutputs } from "../utils/index.js";
+import { extractAndHashClientIp, getExtraOutputs, resolveRequestPath } from "../utils/index.js";
 import {
   applyBaselineSecurityHeaders,
   isHttpsRequest,
@@ -32,7 +32,7 @@ export function withMiddleware(
     const ip = extractAndHashClientIp(req);
     const userAgent = req.headers.get("user-agent") ?? "unknown";
     const method = req.method;
-    const path = req.url;
+    const path = resolveRequestPath(req.url);
 
     // Add additional logging context to all context.log/.warn/.error messages
     await withLogging(req, context);

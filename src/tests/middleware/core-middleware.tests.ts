@@ -16,6 +16,9 @@ const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
 const ORIGINAL_ENFORCE_HTTPS = process.env.ENFORCE_HTTPS;
 const ORIGINAL_HMAC_SECRET = process.env.HMAC_SECRET;
 const ORIGINAL_CORS_ALLOWED_ORIGINS = process.env.CORS_ALLOWED_ORIGINS;
+const ORIGINAL_AUTH_COOKIE_SAME_SITE = process.env.AUTH_COOKIE_SAME_SITE;
+const ORIGINAL_PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL;
+const ORIGINAL_TRUST_PROXY_HEADERS = process.env.TRUST_PROXY_HEADERS;
 
 function createContext(): InvocationContext {
   const context = {
@@ -67,6 +70,21 @@ afterEach(() => {
     delete process.env.CORS_ALLOWED_ORIGINS;
   } else {
     process.env.CORS_ALLOWED_ORIGINS = ORIGINAL_CORS_ALLOWED_ORIGINS;
+  }
+  if (ORIGINAL_AUTH_COOKIE_SAME_SITE === undefined) {
+    delete process.env.AUTH_COOKIE_SAME_SITE;
+  } else {
+    process.env.AUTH_COOKIE_SAME_SITE = ORIGINAL_AUTH_COOKIE_SAME_SITE;
+  }
+  if (ORIGINAL_PUBLIC_BASE_URL === undefined) {
+    delete process.env.PUBLIC_BASE_URL;
+  } else {
+    process.env.PUBLIC_BASE_URL = ORIGINAL_PUBLIC_BASE_URL;
+  }
+  if (ORIGINAL_TRUST_PROXY_HEADERS === undefined) {
+    delete process.env.TRUST_PROXY_HEADERS;
+  } else {
+    process.env.TRUST_PROXY_HEADERS = ORIGINAL_TRUST_PROXY_HEADERS;
   }
   vi.restoreAllMocks();
 });
@@ -161,7 +179,7 @@ describe("withCSRF", () => {
       name: "csrf-token",
       value: expect.any(String),
       secure: true,
-      sameSite: "None",
+      sameSite: "Lax",
     });
   });
 
@@ -181,6 +199,25 @@ describe("withCSRF", () => {
       value: expect.any(String),
       secure: false,
       sameSite: "Lax",
+    });
+  });
+
+  it("allows explicit cross-site csrf cookies only when configured on https", async () => {
+    process.env.AUTH_COOKIE_SAME_SITE = "None";
+    const context = createContext();
+    const request = createRequest("GET", "https://api.example.com/resource", {
+      origin: "http://attacker.example",
+      "x-forwarded-proto": "http",
+      "x-forwarded-host": "attacker.example",
+    });
+
+    const shouldContinue = await withCSRF()(request, context);
+    const cookies = context.extraOutputs.get("cookies") as Array<Record<string, unknown>>;
+
+    expect(shouldContinue).toBe(true);
+    expect(cookies[0]).toMatchObject({
+      secure: true,
+      sameSite: "None",
     });
   });
 
@@ -275,7 +312,7 @@ describe("withSecurity", () => {
 describe("withLogging", () => {
   it("injects prefixed logger helpers into context", async () => {
     const context = createContext();
-    const request = createRequest("PATCH", "https://api.example.com/users/1");
+    const request = createRequest("PATCH", "https://api.example.com/users/1?token=secret");
 
     const shouldContinue = await withLogging(request, context);
     const logger = context.extraInputs.get("logger") as {
@@ -290,13 +327,16 @@ describe("withLogging", () => {
 
     expect(shouldContinue).toBe(true);
     expect(context.log).toHaveBeenCalledWith(
-      expect.stringContaining("PATCH https://api.example.com/users/1 one")
+      expect.stringContaining("PATCH /users/1 one")
     );
     expect(context.warn).toHaveBeenCalledWith(
-      expect.stringContaining("PATCH https://api.example.com/users/1 two")
+      expect.stringContaining("PATCH /users/1 two")
     );
     expect(context.error).toHaveBeenCalledWith(
-      expect.stringContaining("PATCH https://api.example.com/users/1 three")
+      expect.stringContaining("PATCH /users/1 three")
+    );
+    expect(context.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("token=secret")
     );
   });
 });

@@ -1,6 +1,10 @@
 import { HttpRequest } from "@azure/functions";
 import { createHmac } from "crypto";
 
+export interface ClientIpExtractionOptions {
+  trustProxyHeaders?: boolean;
+}
+
 function getHmacSecret(): string {
   const secret = process.env.HMAC_SECRET?.trim();
   if (!secret) {
@@ -9,12 +13,25 @@ function getHmacSecret(): string {
   return secret;
 }
 
-export function extractAndHashClientIp(req: HttpRequest): string {
-  const rawIp =
-    req.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
-    req.headers.get("x-client-ip")?.trim() ||
-    req.headers.get("host")?.trim() ||
-    "unknown";
+function shouldTrustProxyHeaders(options?: ClientIpExtractionOptions): boolean {
+  return (
+    options?.trustProxyHeaders ??
+    (process.env.TRUST_PROXY_HEADERS ?? "false").toLowerCase() === "true"
+  );
+}
+
+export function extractAndHashClientIp(
+  req: HttpRequest,
+  options?: ClientIpExtractionOptions
+): string {
+  const rawIp = shouldTrustProxyHeaders(options)
+    ? (
+        req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+        req.headers.get("x-real-ip")?.trim() ||
+        req.headers.get("x-client-ip")?.trim() ||
+        "unknown"
+      )
+    : "unknown";
   const ip = createHmac("sha256", getHmacSecret()).update(rawIp).digest("hex");
   return ip;
 }
