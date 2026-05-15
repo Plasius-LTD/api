@@ -5,18 +5,30 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   extractAndHashClientIp,
   getCookie,
+  getCookieSecurity,
   getExtraOutputs,
+  resolvePublicBaseUrl,
+  resolveRequestPath,
   setCookie,
 } from "../../utils/index.js";
 
-function createRequest(headers: Record<string, string> = {}): HttpRequest {
+function createRequest(
+  headers: Record<string, string> = {},
+  url = "https://api.example.test/path?token=secret"
+): HttpRequest {
   return {
     headers: new Headers(headers),
+    url,
   } as unknown as HttpRequest;
 }
 
 const ORIGINAL_HMAC_SECRET = process.env.HMAC_SECRET;
 const ORIGINAL_TRUST_PROXY_HEADERS = process.env.TRUST_PROXY_HEADERS;
+const ORIGINAL_PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL;
+const ORIGINAL_FRONTEND_DOMAIN = process.env.FRONTEND_DOMAIN;
+const ORIGINAL_DOMAIN = process.env.DOMAIN;
+const ORIGINAL_AUTH_COOKIE_SAME_SITE = process.env.AUTH_COOKIE_SAME_SITE;
+const ORIGINAL_COOKIE_SAME_SITE = process.env.COOKIE_SAME_SITE;
 
 beforeEach(() => {
   process.env.HMAC_SECRET = "test-ip-hash-secret";
@@ -32,6 +44,31 @@ afterEach(() => {
     delete process.env.TRUST_PROXY_HEADERS;
   } else {
     process.env.TRUST_PROXY_HEADERS = ORIGINAL_TRUST_PROXY_HEADERS;
+  }
+  if (ORIGINAL_PUBLIC_BASE_URL === undefined) {
+    delete process.env.PUBLIC_BASE_URL;
+  } else {
+    process.env.PUBLIC_BASE_URL = ORIGINAL_PUBLIC_BASE_URL;
+  }
+  if (ORIGINAL_FRONTEND_DOMAIN === undefined) {
+    delete process.env.FRONTEND_DOMAIN;
+  } else {
+    process.env.FRONTEND_DOMAIN = ORIGINAL_FRONTEND_DOMAIN;
+  }
+  if (ORIGINAL_DOMAIN === undefined) {
+    delete process.env.DOMAIN;
+  } else {
+    process.env.DOMAIN = ORIGINAL_DOMAIN;
+  }
+  if (ORIGINAL_AUTH_COOKIE_SAME_SITE === undefined) {
+    delete process.env.AUTH_COOKIE_SAME_SITE;
+  } else {
+    process.env.AUTH_COOKIE_SAME_SITE = ORIGINAL_AUTH_COOKIE_SAME_SITE;
+  }
+  if (ORIGINAL_COOKIE_SAME_SITE === undefined) {
+    delete process.env.COOKIE_SAME_SITE;
+  } else {
+    process.env.COOKIE_SAME_SITE = ORIGINAL_COOKIE_SAME_SITE;
   }
 });
 
@@ -95,6 +132,97 @@ describe("request context helpers", () => {
 
     expect(out.headers).toBeInstanceOf(Headers);
     expect(out.cookies).toEqual([]);
+  });
+});
+
+describe("request URL helpers", () => {
+  it("prefers configured public origins over spoofable request headers", () => {
+    process.env.PUBLIC_BASE_URL = "https://configured.example/app";
+    process.env.TRUST_PROXY_HEADERS = "true";
+    const request = createRequest({
+      origin: "https://attacker.example",
+      referer: "https://attacker.example/session",
+      "x-forwarded-proto": "https",
+      "x-forwarded-host": "proxy.example",
+    });
+
+    expect(resolvePublicBaseUrl(request)).toBe("https://configured.example");
+  });
+
+  it("falls back through configured frontend and domain values", () => {
+    process.env.FRONTEND_DOMAIN = "https://frontend.example/app";
+    const frontendRequest = createRequest();
+
+    expect(resolvePublicBaseUrl(frontendRequest)).toBe("https://frontend.example");
+
+    delete process.env.FRONTEND_DOMAIN;
+    process.env.DOMAIN = "https://domain.example/ignored";
+
+    expect(resolvePublicBaseUrl(createRequest())).toBe("https://domain.example");
+  });
+
+  it("uses forwarded proto and host only when proxy headers are trusted", () => {
+    const request = createRequest({
+      "x-forwarded-proto": "https",
+      "x-forwarded-host": "forwarded.example, ignored.example",
+    });
+
+    expect(resolvePublicBaseUrl(request)).toBe("https://api.example.test");
+
+    process.env.TRUST_PROXY_HEADERS = "true";
+
+    expect(resolvePublicBaseUrl(request)).toBe("https://forwarded.example");
+  });
+
+  it("parses the standard Forwarded header when trusted", () => {
+    process.env.TRUST_PROXY_HEADERS = "true";
+    const request = createRequest({
+      forwarded: 'for=203.0.113.10;proto="https";host="forwarded.example"',
+    });
+
+    expect(resolvePublicBaseUrl(request)).toBe("https://forwarded.example");
+  });
+
+  it("ignores malformed public URL sources and falls back safely", () => {
+    process.env.PUBLIC_BASE_URL = "not a url";
+    process.env.FRONTEND_DOMAIN = "";
+    process.env.DOMAIN = "also not a url";
+    process.env.TRUST_PROXY_HEADERS = "true";
+    const request = createRequest(
+      {
+        forwarded: "for=203.0.113.10;proto=https",
+        "x-forwarded-proto": "https",
+      },
+      "also not a url"
+    );
+
+    expect(resolvePublicBaseUrl(request)).toBe("http://localhost:5173");
+  });
+
+  it("derives cookie security from the resolved public URL and explicit SameSite policy", () => {
+    process.env.PUBLIC_BASE_URL = "https://configured.example";
+    process.env.AUTH_COOKIE_SAME_SITE = "Strict";
+
+    expect(getCookieSecurity(createRequest())).toEqual({
+      secure: true,
+      sameSite: "Strict",
+    });
+  });
+
+  it("downgrades SameSite=None when the cookie cannot be secure", () => {
+    process.env.PUBLIC_BASE_URL = "http://localhost:5173";
+    process.env.AUTH_COOKIE_SAME_SITE = "None";
+
+    expect(getCookieSecurity(createRequest())).toEqual({
+      secure: false,
+      sameSite: "Lax",
+    });
+  });
+
+  it("extracts path only from absolute, relative, and malformed URLs", () => {
+    expect(resolveRequestPath("https://api.example.test/a/b?token=secret")).toBe("/a/b");
+    expect(resolveRequestPath("/relative/path?token=secret")).toBe("/relative/path");
+    expect(resolveRequestPath("?token=secret")).toBe("/");
   });
 });
 
