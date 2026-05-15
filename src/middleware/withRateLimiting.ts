@@ -1,6 +1,7 @@
 import { HttpRequest, InvocationContext } from "@azure/functions";
 import { Middleware } from "./withMiddleware.js";
 import Redis from "ioredis";
+import { createHmac } from "node:crypto";
 
 export interface RateLimitConfig {
   limit: number;
@@ -11,6 +12,7 @@ export interface ApiRateLimiterConfig {
   global?: RateLimitConfig;
   perUser?: RateLimitConfig;
   perApi?: RateLimitConfig;
+  trustProxyHeaders?: boolean;
 }
 
 const redisUrl = process.env.REDIS_URL?.trim();
@@ -20,6 +22,84 @@ const redisEnabled =
     ((redisUrl || redisHost) ? "true" : "false")).toLowerCase() === "true";
 
 let redisClient: Redis | null | undefined;
+
+function getRuntimeHmacSecret(): string {
+  const secret =
+    process.env.RATE_LIMIT_HMAC_SECRET?.trim() ||
+    process.env.HMAC_SECRET?.trim();
+
+  if (!secret) {
+    throw new Error(
+      "RATE_LIMIT_HMAC_SECRET or HMAC_SECRET is required for privacy-safe rate limiting."
+    );
+  }
+
+  return secret;
+}
+
+function hmacValue(value: string): string {
+  return createHmac("sha256", getRuntimeHmacSecret())
+    .update(value)
+    .digest("hex");
+}
+
+function getHeaderValue(req: HttpRequest, name: string): string | undefined {
+  const value = req.headers.get(name)?.trim();
+  return value ? value : undefined;
+}
+
+function getContextPrincipal(context: InvocationContext): string | undefined {
+  const user = context.extraInputs.get("user");
+  if (!user || typeof user !== "object") {
+    return undefined;
+  }
+
+  const record = user as Record<string, unknown>;
+  const candidate = record.userId ?? record.id ?? record.sub ?? record.subject;
+
+  return typeof candidate === "string" && candidate.trim()
+    ? candidate.trim()
+    : undefined;
+}
+
+function shouldTrustProxyHeaders(config: ApiRateLimiterConfig): boolean {
+  return (
+    config.trustProxyHeaders ??
+    (process.env.TRUST_PROXY_HEADERS ?? "false").toLowerCase() === "true"
+  );
+}
+
+function createPerUserRateLimitKey(
+  req: HttpRequest,
+  context: InvocationContext,
+  config: ApiRateLimiterConfig
+): string {
+  const principal = getContextPrincipal(context);
+  if (principal) {
+    return `rate:user:principal:${hmacValue(principal)}`;
+  }
+
+  const authorization = getHeaderValue(req, "authorization");
+  if (authorization) {
+    return `rate:user:auth:${hmacValue(authorization)}`;
+  }
+
+  if (shouldTrustProxyHeaders(config)) {
+    const forwardedFor = getHeaderValue(req, "x-forwarded-for")
+      ?.split(",")[0]
+      ?.trim();
+    const clientIp =
+      forwardedFor ||
+      getHeaderValue(req, "x-real-ip") ||
+      getHeaderValue(req, "x-client-ip");
+
+    if (clientIp) {
+      return `rate:user:ip:${hmacValue(clientIp)}`;
+    }
+  }
+
+  return "rate:user:anonymous";
+}
 
 function getRedisClient(): Redis | null {
   if (!redisEnabled) {
@@ -45,7 +125,8 @@ function getRedisClient(): Redis | null {
 async function checkRateLimit(
   key: string,
   config: RateLimitConfig,
-  context: InvocationContext
+  context: InvocationContext,
+  label: string
 ): Promise<{
   allowed: boolean;
   remaining: number;
@@ -56,13 +137,13 @@ async function checkRateLimit(
     log: (...args: any[]) => void;
     warn: (...args: any[]) => void;
     error: (...args: any[]) => void;
-  }
+  };
   const now = Date.now();
   const windowKey = `${key}:${Math.floor(now / config.windowMs)}`;
 
   const redis = getRedisClient();
   if (!redis) {
-    logger?.log(`Rate limiting bypassed for ${key} (Redis disabled)`);
+    logger?.log(`Rate limiting bypassed for ${label} (Redis disabled)`);
     return {
       allowed: true,
       remaining: config.limit,
@@ -82,13 +163,13 @@ async function checkRateLimit(
     const reset = Math.ceil((now + ttl) / 1000); // Unix timestamp when reset will happen
 
     if (count > config.limit) {
-      logger?.warn(`Rate limit exceeded for ${key}. Retry after ${retryAfter}s.`);
+      logger?.warn(`Rate limit exceeded for ${label}. Retry after ${retryAfter}s.`);
       return { allowed: false, remaining: 0, retryAfter, reset };
     }
 
     return { allowed: true, remaining, reset };
   } catch (error: unknown) {
-    logger?.warn(`Rate limit backend unavailable for ${key}; allowing request.`);
+    logger?.warn(`Rate limit backend unavailable for ${label}; allowing request.`);
     logger?.warn(error);
     return {
       allowed: true,
@@ -107,7 +188,8 @@ export function withRateLimiting(config: ApiRateLimiterConfig): Middleware {
       const result = await checkRateLimit(
         "rate:global",
         config.global,
-        context
+        context,
+        "global"
       );
       if (!result.allowed) {
         context.extraOutputs.set("http", {
@@ -126,15 +208,11 @@ export function withRateLimiting(config: ApiRateLimiterConfig): Middleware {
 
     // ----- PER USER -----
     if (config.perUser) {
-      const userId =
-        req.headers.get("x-user-id") ||
-        req.headers.get("authorization") ||
-        req.headers.get("x-forwarded-for") ||
-        "anonymous";
       const result = await checkRateLimit(
-        `rate:user:${userId}`,
+        createPerUserRateLimitKey(req, context, config),
         config.perUser,
-        context
+        context,
+        "user"
       );
       if (!result.allowed) {
         context.extraOutputs.set("http", {
@@ -157,7 +235,8 @@ export function withRateLimiting(config: ApiRateLimiterConfig): Middleware {
       const result = await checkRateLimit(
         `rate:api:${apiKey}`,
         config.perApi,
-        context
+        context,
+        "api"
       );
       if (!result.allowed) {
         context.extraOutputs.set("http", {

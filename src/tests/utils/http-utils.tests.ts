@@ -1,6 +1,6 @@
 import type { HttpRequest, InvocationContext } from "@azure/functions";
 import { createHmac } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   extractAndHashClientIp,
@@ -14,6 +14,20 @@ function createRequest(headers: Record<string, string> = {}): HttpRequest {
     headers: new Headers(headers),
   } as unknown as HttpRequest;
 }
+
+const ORIGINAL_HMAC_SECRET = process.env.HMAC_SECRET;
+
+beforeEach(() => {
+  process.env.HMAC_SECRET = "test-ip-hash-secret";
+});
+
+afterEach(() => {
+  if (ORIGINAL_HMAC_SECRET === undefined) {
+    delete process.env.HMAC_SECRET;
+  } else {
+    process.env.HMAC_SECRET = ORIGINAL_HMAC_SECRET;
+  }
+});
 
 describe("cookie helpers", () => {
   it("serializes cookie attributes", () => {
@@ -87,7 +101,7 @@ describe("IP hashing helper", () => {
     const hash = extractAndHashClientIp(request);
     const expected = createHmac(
       "sha256",
-      "OuYDwS9zpItZ9d84mIuZ+rzU6c9abFkzDWzXAPk4elg="
+      "test-ip-hash-secret"
     )
       .update("203.0.113.10")
       .digest("hex");
@@ -105,5 +119,14 @@ describe("IP hashing helper", () => {
     expect(withHostHash).not.toBe(unknownHash);
     expect(withHostHash).toHaveLength(64);
     expect(unknownHash).toHaveLength(64);
+  });
+
+  it("requires an explicit hmac secret", () => {
+    delete process.env.HMAC_SECRET;
+    const request = createRequest({
+      "x-forwarded-for": "203.0.113.10",
+    });
+
+    expect(() => extractAndHashClientIp(request)).toThrow(/HMAC_SECRET/);
   });
 });

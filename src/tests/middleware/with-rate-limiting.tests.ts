@@ -12,6 +12,7 @@ const ORIGINAL_REDIS_URL = process.env.REDIS_URL;
 const ORIGINAL_REDIS_HOST = process.env.REDIS_HOST;
 const ORIGINAL_REDIS_PORT = process.env.REDIS_PORT;
 const ORIGINAL_REDIS_PASSWORD = process.env.REDIS_PASSWORD;
+const ORIGINAL_RATE_LIMIT_HMAC_SECRET = process.env.RATE_LIMIT_HMAC_SECRET;
 
 function createContext(): InvocationContext {
   const context = {
@@ -44,6 +45,7 @@ async function loadWithRateLimiting(
   options: {
     redisEnabled: boolean;
     redisImplementation?: new (...args: unknown[]) => RedisLike;
+    rateLimitSecret?: string;
   }
 ) {
   vi.resetModules();
@@ -76,6 +78,13 @@ async function loadWithRateLimiting(
   delete process.env.REDIS_HOST;
   delete process.env.REDIS_PORT;
   delete process.env.REDIS_PASSWORD;
+  if (options.rateLimitSecret === undefined) {
+    process.env.RATE_LIMIT_HMAC_SECRET = "test-rate-limit-secret";
+  } else if (options.rateLimitSecret === "") {
+    delete process.env.RATE_LIMIT_HMAC_SECRET;
+  } else {
+    process.env.RATE_LIMIT_HMAC_SECRET = options.rateLimitSecret;
+  }
 
   return import("../../middleware/withRateLimiting.js");
 }
@@ -105,6 +114,11 @@ afterEach(() => {
     delete process.env.REDIS_PASSWORD;
   } else {
     process.env.REDIS_PASSWORD = ORIGINAL_REDIS_PASSWORD;
+  }
+  if (ORIGINAL_RATE_LIMIT_HMAC_SECRET === undefined) {
+    delete process.env.RATE_LIMIT_HMAC_SECRET;
+  } else {
+    process.env.RATE_LIMIT_HMAC_SECRET = ORIGINAL_RATE_LIMIT_HMAC_SECRET;
   }
 
   vi.restoreAllMocks();
@@ -138,7 +152,9 @@ describe("withRateLimiting", () => {
     const middleware = withRateLimiting({
       global: { limit: 1, windowMs: 1_000 },
     });
-    const request = createRequest("GET", "https://api.example.com/resource");
+    const request = createRequest("GET", "https://api.example.com/resource", {
+      authorization: "Bearer raw-token-value",
+    });
     const context = createContext();
 
     expect(await middleware(request, context)).toBe(true);
@@ -170,6 +186,46 @@ describe("withRateLimiting", () => {
     expect(response.status).toBe(429);
     expect(String(response.body)).toContain("user limit");
     nowSpy.mockRestore();
+  });
+
+  it("does not use raw authorization tokens or client user headers in Redis keys", async () => {
+    const observedKeys: string[] = [];
+
+    class CapturingRedis {
+      async incr(key: string) {
+        observedKeys.push(key);
+        return 1;
+      }
+      async pexpire() {
+        return 1;
+      }
+      async pttl() {
+        return 2500;
+      }
+    }
+
+    const { withRateLimiting } = await loadWithRateLimiting({
+      redisEnabled: true,
+      redisImplementation: CapturingRedis as unknown as new (...args: unknown[]) => RedisLike,
+    });
+    const middleware = withRateLimiting({
+      perUser: { limit: 5, windowMs: 1_000 },
+    });
+
+    const context = createContext();
+    const request = createRequest("POST", "https://api.example.com/resource", {
+      authorization: "Bearer raw-token-value",
+      "x-user-id": "spoofed-user",
+      "x-forwarded-for": "203.0.113.10",
+    });
+
+    await middleware(request, context);
+
+    expect(observedKeys).toHaveLength(1);
+    expect(observedKeys[0]).toContain("rate:user:auth:");
+    expect(observedKeys[0]).not.toContain("raw-token-value");
+    expect(observedKeys[0]).not.toContain("spoofed-user");
+    expect(observedKeys[0]).not.toContain("203.0.113.10");
   });
 
   it("blocks requests when per-api limit is exceeded", async () => {
@@ -219,6 +275,10 @@ describe("withRateLimiting", () => {
 
     expect(shouldContinue).toBe(true);
     expect(context.extraOutputs.get("http")).toBeUndefined();
+    const logger = context.extraInputs.get("logger") as {
+      warn: ReturnType<typeof vi.fn>;
+    };
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("Bearer"));
     nowSpy.mockRestore();
   });
 });

@@ -16,7 +16,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - (placeholder)
 
 - **Security**
-  - (placeholder)
+  - Hardened shared CORS defaults so credentialed requests require an explicit trusted origin and wildcard CORS cannot be combined with credentials.
+  - Removed the OAuth refresh-token CSRF bypass from the shared CSRF middleware.
+  - Reworked rate-limit identity keys and logs so raw bearer tokens, forwarded IPs, and client-supplied user IDs are not stored or logged.
+  - Removed the hard-coded IP hashing HMAC fallback; deployments must configure `HMAC_SECRET`.
 
 ## [1.0.14] - 2026-05-13
 

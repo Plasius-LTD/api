@@ -49,6 +49,13 @@ Public generic API helper package.
   - `withValidatedParam({ paramName, validate, contextKey? })`
 - Consumers keep validation policy local by supplying their own validator and normalized value contract.
 
+## Security Configuration
+
+- `CORS_ALLOWED_ORIGINS` or `ALLOWED_ORIGINS`: comma-separated trusted browser origins for credentialed CORS. Credentialed wildcard CORS is rejected by default.
+- `HMAC_SECRET`: required before request IP addresses are hashed for privacy-preserving request logs.
+- `RATE_LIMIT_HMAC_SECRET`: required for rate-limit identity hashing. If omitted, `HMAC_SECRET` is used.
+- `TRUST_PROXY_HEADERS`: opt-in flag for using forwarded IP headers as unauthenticated rate-limit identity input. Leave unset unless the deployment edge strips and rewrites those headers.
+
 ## Install
 
 ```bash
