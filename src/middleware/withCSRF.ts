@@ -27,12 +27,10 @@ function shouldSkipCsrfValidation(request: HttpRequest): boolean {
 
   const oauthCallbackPattern = /(^|\/)(?:api\/)?oauth\/[^/]+\/callback$/i;
   const appleNotificationPattern = /(^|\/)(?:api\/)?oauth\/apple\/notification$/i;
-  const oauthRefreshPattern = /(^|\/)(?:api\/)?oauth\/refresh-token$/i;
 
   return (
     oauthCallbackPattern.test(pathname) ||
-    appleNotificationPattern.test(pathname) ||
-    oauthRefreshPattern.test(pathname)
+    appleNotificationPattern.test(pathname)
   );
 }
 
