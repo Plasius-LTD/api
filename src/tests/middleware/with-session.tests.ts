@@ -1,6 +1,8 @@
 import type { HttpRequest, InvocationContext } from "@azure/functions";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { withSession } from "../../middleware/withSession.js";
+
+const ORIGINAL_AUTH_COOKIE_SAME_SITE = process.env.AUTH_COOKIE_SAME_SITE;
 
 function createRequest(
   url: string,
@@ -20,6 +22,13 @@ function createContext(): InvocationContext {
 }
 
 describe("withSession middleware", () => {
+  afterEach(() => {
+    if (ORIGINAL_AUTH_COOKIE_SAME_SITE === undefined) {
+      delete process.env.AUTH_COOKIE_SAME_SITE;
+    } else {
+      process.env.AUTH_COOKIE_SAME_SITE = ORIGINAL_AUTH_COOKIE_SAME_SITE;
+    }
+  });
   it("reuses existing session id when present", async () => {
     const request = createRequest("https://api.example.com/resource", {
       cookie: "sessionId=existing-id",
@@ -52,6 +61,23 @@ describe("withSession middleware", () => {
       value: sessionId,
       path: "/",
       httpOnly: true,
+      sameSite: "Lax",
+      secure: true,
+    });
+  });
+
+  it("issues SameSite=None only when explicitly configured on https", async () => {
+    process.env.AUTH_COOKIE_SAME_SITE = "None";
+    const request = createRequest("https://api.example.com/resource");
+    const context = createContext();
+
+    const result = await withSession(request, context);
+    const cookies = context.extraOutputs.get("cookies") as Array<
+      Record<string, unknown>
+    >;
+
+    expect(result).toBe(true);
+    expect(cookies[0]).toMatchObject({
       sameSite: "None",
       secure: true,
     });

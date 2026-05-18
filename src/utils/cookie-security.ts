@@ -1,6 +1,6 @@
 import type { HttpRequest } from "@azure/functions";
 
-export type CookieSameSite = "None" | "Lax";
+export type CookieSameSite = "None" | "Lax" | "Strict";
 
 function normalizeBaseUrl(value: string | null | undefined): string | null {
   if (!value) {
@@ -30,6 +30,10 @@ function firstHeaderValue(value: string | null): string | null {
 }
 
 function getForwardedBaseUrl(request: HttpRequest): string | null {
+  if ((process.env.TRUST_PROXY_HEADERS ?? "false").toLowerCase() !== "true") {
+    return null;
+  }
+
   const forwardedProto = firstHeaderValue(request.headers.get("x-forwarded-proto"));
   const forwardedHost = firstHeaderValue(request.headers.get("x-forwarded-host"));
   if (forwardedProto && forwardedHost) {
@@ -77,23 +81,37 @@ function getForwardedBaseUrl(request: HttpRequest): string | null {
 }
 
 export function resolvePublicBaseUrl(request: HttpRequest): string {
-  const headerOrigin = normalizeBaseUrl(request.headers.get("origin"));
-  const headerReferer = normalizeBaseUrl(request.headers.get("referer"));
   const configuredPublicBase = normalizeBaseUrl(process.env.PUBLIC_BASE_URL);
   const frontendDomain = normalizeBaseUrl(process.env.FRONTEND_DOMAIN);
   const configuredDomain = normalizeBaseUrl(process.env.DOMAIN);
   const requestBaseUrl = normalizeBaseUrl(request.url);
 
   const resolved =
-    getForwardedBaseUrl(request) ??
-    headerOrigin ??
-    headerReferer ??
     configuredPublicBase ??
     frontendDomain ??
     configuredDomain ??
+    getForwardedBaseUrl(request) ??
     requestBaseUrl;
 
   return resolved ?? "http://localhost:5173";
+}
+
+function resolveCookieSameSite(secure: boolean): CookieSameSite {
+  const raw =
+    process.env.AUTH_COOKIE_SAME_SITE ??
+    process.env.COOKIE_SAME_SITE ??
+    "Lax";
+  const normalized = raw.trim().toLowerCase();
+
+  if (normalized === "strict") {
+    return "Strict";
+  }
+
+  if (normalized === "none") {
+    return secure ? "None" : "Lax";
+  }
+
+  return "Lax";
 }
 
 export function getCookieSecurity(request: HttpRequest): {
@@ -105,6 +123,6 @@ export function getCookieSecurity(request: HttpRequest): {
 
   return {
     secure,
-    sameSite: secure ? "None" : "Lax",
+    sameSite: resolveCookieSameSite(secure),
   };
 }
