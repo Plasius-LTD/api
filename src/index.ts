@@ -32,3 +32,14 @@ export {
   getCookieSecurity,
   resolvePublicBaseUrl,
 } from "./utils/cookie-security.js";
+export {
+  API_ERROR_KEY_HEADER,
+  apiErrorTranslationKeys,
+  apiTranslations,
+  applyApiErrorKeyHeader,
+  createApiErrorBody,
+  createApiErrorResponse,
+  translateApiErrorText,
+} from "./utils/error-messages.js";
+export { apiEnGbTranslations } from "./translations/en-GB.js";
+export * from "./utils/http.errors.js";

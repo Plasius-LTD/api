@@ -1,56 +1,57 @@
-import { HttpResponseInit } from "@azure/functions"
+import type { HttpResponseInit } from "@azure/functions";
+import { apiErrorTranslationKeys, createApiErrorResponse } from "./error-messages.js";
 
-export const badRequestResponse: HttpResponseInit = {
-    status: 400,
-    body: JSON.stringify({ error: 'Bad Request' }),
-}
+export const badRequestResponse: HttpResponseInit = createApiErrorResponse(
+  400,
+  apiErrorTranslationKeys.badRequest
+);
 
-export const unauthorizedResponse: HttpResponseInit = {
-    status: 401,
-    body: JSON.stringify({ error: 'Unauthorized' }),
-}
+export const unauthorizedResponse: HttpResponseInit = createApiErrorResponse(
+  401,
+  apiErrorTranslationKeys.unauthorized
+);
 
-export const forbiddenResponse: HttpResponseInit = {
-    status: 403,
-    body: JSON.stringify({ error: 'Forbidden' }),
-}
+export const forbiddenResponse: HttpResponseInit = createApiErrorResponse(
+  403,
+  apiErrorTranslationKeys.forbidden
+);
 
-export const notFoundResponse: HttpResponseInit = {
-    status: 404,
-    body: JSON.stringify({ error: 'Not Found' }),
-}
+export const notFoundResponse: HttpResponseInit = createApiErrorResponse(
+  404,
+  apiErrorTranslationKeys.notFound
+);
 
-export const requestTimeoutResponse: HttpResponseInit = {
-    status: 408,
-    body: JSON.stringify({ error: 'Request Timeout' }),
-}
+export const requestTimeoutResponse: HttpResponseInit = createApiErrorResponse(
+  408,
+  apiErrorTranslationKeys.requestTimeout
+);
 
-export const tooManyRequestsResponse: HttpResponseInit = {
-    status: 429,
-    body: JSON.stringify({ error: 'Too Many Requests' }),
-}
+export const tooManyRequestsResponse: HttpResponseInit = createApiErrorResponse(
+  429,
+  apiErrorTranslationKeys.tooManyRequests
+);
 
-export const internalServerErrorResponse: HttpResponseInit = {
-    status: 500,
-    body: JSON.stringify({ error: 'Internal Server Error' }),
-}
+export const internalServerErrorResponse: HttpResponseInit = createApiErrorResponse(
+  500,
+  apiErrorTranslationKeys.internalServerError
+);
 
-export const notImplementedResponse: HttpResponseInit = {
-    status: 501,
-    body: JSON.stringify({ error: 'Not Implemented' }),
-}
+export const notImplementedResponse: HttpResponseInit = createApiErrorResponse(
+  501,
+  apiErrorTranslationKeys.notImplemented
+);
 
-export const badGatewayResponse: HttpResponseInit = {
-    status: 502,
-    body: JSON.stringify({ error: 'Bad Gateway' }),
-}
+export const badGatewayResponse: HttpResponseInit = createApiErrorResponse(
+  502,
+  apiErrorTranslationKeys.badGateway
+);
 
-export const serviceUnavailableResponse: HttpResponseInit = {
-    status: 503,
-    body: JSON.stringify({ error: 'Service Unavailable' }),
-}
+export const serviceUnavailableResponse: HttpResponseInit = createApiErrorResponse(
+  503,
+  apiErrorTranslationKeys.serviceUnavailable
+);
 
-export const gatewayTimeoutResponse: HttpResponseInit = {
-    status: 504,
-    body: JSON.stringify({ error: 'Gateway Timeout' }),
-}
+export const gatewayTimeoutResponse: HttpResponseInit = createApiErrorResponse(
+  504,
+  apiErrorTranslationKeys.gatewayTimeout
+);

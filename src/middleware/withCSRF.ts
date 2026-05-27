@@ -3,6 +3,10 @@ import type { Middleware } from "./withMiddleware";
 import { getCookie, getCookieSecurity } from "../utils";
 import { randomUUID } from "crypto";
 import { getExtraOutputs } from "../utils/index.js";
+import {
+  apiErrorTranslationKeys,
+  createApiErrorResponse,
+} from "../utils/error-messages.js";
 
 const CSRF_HEADER_NAME = "x-csrf-token";
 const CSRF_COOKIE_NAME = "csrf-token";
@@ -80,10 +84,11 @@ export const withCSRF = (): Middleware => {
       if (!headerToken || !cookieToken || headerToken !== cookieToken) {
         logger.warn("CSRF token validation failed.");
         context.extraOutputs.set("http", {
-          status: 403,
-          headers,
-          cookies,
-          body: "Invalid CSRF token.",
+          ...createApiErrorResponse(403, apiErrorTranslationKeys.csrfInvalid, {
+            headers,
+            cookies,
+            json: false,
+          }),
         });
         return false;
       }

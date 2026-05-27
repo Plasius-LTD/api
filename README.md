@@ -49,6 +49,21 @@ Public generic API helper package.
   - `withValidatedParam({ paramName, validate, contextKey? })`
 - Consumers keep validation policy local by supplying their own validator and normalized value contract.
 
+## API Error Localization
+
+- Exports package-owned `en-GB` error translations through `apiEnGbTranslations`.
+- Standard HTTP error helpers now return default English text from `@plasius/translations` and include a stable `errorKey`.
+- Text-body middleware responses keep their existing default English body and expose the key through the `x-plasius-error-key` response header.
+
+```ts
+import {
+  apiErrorTranslationKeys,
+  createApiErrorResponse,
+} from "@plasius/api";
+
+const response = createApiErrorResponse(404, apiErrorTranslationKeys.notFound);
+```
+
 ## Security Configuration
 
 - `CORS_ALLOWED_ORIGINS` or `ALLOWED_ORIGINS`: comma-separated trusted browser origins for credentialed CORS. Credentialed wildcard CORS is rejected by default.

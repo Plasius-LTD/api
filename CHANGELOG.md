@@ -7,10 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 - **Added**
-  - (placeholder)
+  - Added package-owned `en-GB` API error translations and helper exports backed by `@plasius/translations`.
 
 - **Changed**
-  - (placeholder)
+  - API middleware and standard HTTP error helpers now expose stable translation keys while preserving default English response text and status codes.
 
 - **Fixed**
   - (placeholder)

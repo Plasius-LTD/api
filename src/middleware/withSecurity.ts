@@ -2,6 +2,10 @@ import type { HttpRequest, InvocationContext } from "@azure/functions";
 import type { Middleware } from "./withMiddleware";
 import { getExtraOutputs } from "../utils/index.js";
 import {
+  apiErrorTranslationKeys,
+  createApiErrorResponse,
+} from "../utils/error-messages.js";
+import {
   applyBaselineSecurityHeaders,
   isHttpsRequest,
   isInsecureLocalRequest,
@@ -21,10 +25,11 @@ export function withSecurity(): Middleware {
       !isInsecureLocalRequest(request)
     ) {
       context.extraOutputs.set("http", {
-        status: 426,
-        headers,
-        cookies,
-        body: "HTTPS is required.",
+        ...createApiErrorResponse(426, apiErrorTranslationKeys.httpsRequired, {
+          headers,
+          cookies,
+          json: false,
+        }),
       });
       return Promise.resolve(false);
     }
