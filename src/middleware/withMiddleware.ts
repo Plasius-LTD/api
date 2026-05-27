@@ -2,6 +2,10 @@ import type { HttpRequest, HttpResponseInit, InvocationContext } from "@azure/fu
 import { withLogging } from "./withLogging";
 import { extractAndHashClientIp, getExtraOutputs, resolveRequestPath } from "../utils/index.js";
 import {
+  apiErrorTranslationKeys,
+  createApiErrorResponse,
+} from "../utils/error-messages.js";
+import {
   applyBaselineSecurityHeaders,
   isHttpsRequest,
   isInsecureLocalRequest,
@@ -48,10 +52,11 @@ export function withMiddleware(
     ) {
       context.log("request rejected: insecure transport in https-enforced mode");
       return {
-        status: 426,
-        headers,
-        cookies,
-        body: "HTTPS is required.",
+        ...createApiErrorResponse(426, apiErrorTranslationKeys.httpsRequired, {
+          headers,
+          cookies,
+          json: false,
+        }),
       };
     }
 

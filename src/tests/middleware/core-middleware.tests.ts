@@ -11,6 +11,10 @@ import { withMiddleware } from "../../middleware/withMiddleware.js";
 import { withSecurity } from "../../middleware/withSecurity.js";
 import { withSession } from "../../middleware/withSession.js";
 import { withValidatedParam } from "../../middleware/withValidatedParam.js";
+import {
+  API_ERROR_KEY_HEADER,
+  apiErrorTranslationKeys,
+} from "../../utils/error-messages.js";
 
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
 const ORIGINAL_ENFORCE_HTTPS = process.env.ENFORCE_HTTPS;
@@ -230,9 +234,12 @@ describe("withCSRF", () => {
 
     const shouldContinue = await withCSRF()(request, context);
     const http = context.extraOutputs.get("http") as HttpResponseInit;
+    const headers = http.headers as Headers;
 
     expect(shouldContinue).toBe(false);
     expect(http.status).toBe(403);
+    expect(http.body).toBe("Invalid CSRF token.");
+    expect(headers.get(API_ERROR_KEY_HEADER)).toBe(apiErrorTranslationKeys.csrfInvalid);
   });
 
   it("allows write requests when csrf header and cookie match", async () => {
@@ -303,9 +310,12 @@ describe("withSecurity", () => {
 
     const shouldContinue = await withSecurity()(request, context);
     const http = context.extraOutputs.get("http") as HttpResponseInit;
+    const headers = http.headers as Headers;
 
     expect(shouldContinue).toBe(false);
     expect(http.status).toBe(426);
+    expect(http.body).toBe("HTTPS is required.");
+    expect(headers.get(API_ERROR_KEY_HEADER)).toBe(apiErrorTranslationKeys.httpsRequired);
   });
 });
 
@@ -351,6 +361,10 @@ describe("withMCPHeader", () => {
 
     expect(shouldContinue).toBe(false);
     expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      error: "Missing x-mcp-model header",
+      errorKey: apiErrorTranslationKeys.mcpModelHeaderMissing,
+    });
   });
 
   it("allows requests that provide x-mcp-model", async () => {
@@ -509,8 +523,10 @@ describe("withMiddleware", () => {
 
     const wrapped = withMiddleware(handler, [mw]);
     const response = await wrapped(request, context);
+    const headers = response.headers as Headers;
 
     expect(response).toMatchObject({ status: 426, body: "HTTPS is required." });
+    expect(headers.get(API_ERROR_KEY_HEADER)).toBe(apiErrorTranslationKeys.httpsRequired);
     expect(mw).not.toHaveBeenCalled();
     expect(handler).not.toHaveBeenCalled();
   });

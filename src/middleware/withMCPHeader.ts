@@ -1,5 +1,9 @@
 import { HttpRequest, InvocationContext } from "@azure/functions";
 import { Middleware } from "./withMiddleware.js";
+import {
+  apiErrorTranslationKeys,
+  createApiErrorBody,
+} from "../utils/error-messages.js";
 
 export const withMCPHeader: Middleware = async (
   req: HttpRequest,
@@ -9,7 +13,7 @@ export const withMCPHeader: Middleware = async (
   if (!modelHeader) {
     context.extraOutputs.set("response", {
       status: 400,
-      body: { error: "Missing x-mcp-model header" },
+      body: createApiErrorBody(apiErrorTranslationKeys.mcpModelHeaderMissing),
     });
     return false;
   }
