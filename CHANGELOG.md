@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - API middleware and standard HTTP error helpers now expose stable translation keys while preserving default English response text and status codes.
 
 - **Fixed**
+  - Restored the package CD workflow so protected `main` releases are prepared by PR and published without direct branch pushes.
   - (placeholder)
 
 - **Security**

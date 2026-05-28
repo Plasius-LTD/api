@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: "Version bump type"
+        description: "Version bump type. Use none after a release-prep PR on protected main."
         required: true
         type: choice
-        default: patch
+        default: none
         options:
           - patch
           - minor
@@ -19,110 +19,92 @@ on:
         type: string
 
 permissions:
-  actions: read
   contents: write
-  id-token: write # for npm provenance (requires Node 18+ and npm >=9)
+  id-token: write
   attestations: write
 
-env:
-  FALLBACK_RUNNER_LABEL: ubuntu-latest
-  SELF_HOSTED_RUNNER_LABELS: '["self-hosted","Linux","X64"]'
+concurrency:
+  group: npm-cd-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  select-runner:
-    name: Select runner
-    runs-on: ubuntu-latest
-    outputs:
-      runner_labels: ${{ steps.select.outputs.runner_labels }}
-    steps:
-      - name: Prefer idle self-hosted runner
-        id: select
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ secrets.RUNNER_SELECTOR_TOKEN || github.token }}
-          script: |
-            const selfHostedLabels = JSON.parse(process.env.SELF_HOSTED_RUNNER_LABELS)
-            const fallbackRunner = process.env.FALLBACK_RUNNER_LABEL
-            let selectedRunnerJson = JSON.stringify(fallbackRunner)
-
-            try {
-              const runners = await github.paginate(
-                github.rest.actions.listSelfHostedRunnersForRepo,
-                {
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  per_page: 100,
-                }
-              )
-
-              const hasMatchingIdleRunner = runners.some((runner) => {
-                const labels = new Set((runner.labels || []).map((label) => label.name))
-                return (
-                  runner.status === "online" &&
-                  runner.busy === false &&
-                  selfHostedLabels.every((label) => labels.has(label))
-                )
-              })
-
-              if (hasMatchingIdleRunner) {
-                selectedRunnerJson = JSON.stringify(selfHostedLabels)
-                core.info(`Selected self-hosted runner labels ${selfHostedLabels.join(", ")}.`)
-              } else {
-                core.info(
-                  `No idle self-hosted runner with labels ${selfHostedLabels.join(", ")} was found; falling back to ${fallbackRunner}.`
-                )
-              }
-            } catch (error) {
-              core.warning(
-                `Could not inspect self-hosted runners; falling back to ${fallbackRunner}. ${error.message}`
-              )
-            }
-
-            core.setOutput("runner_labels", selectedRunnerJson)
-
   publish:
-    needs: select-runner
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner_labels) }}
+    runs-on: ubuntu-latest
     environment: production
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Use Node.js 24
+      - name: Use Node.js
         uses: actions/setup-node@v4
         with:
-          node-version-file: '.nvmrc'
-          cache: 'npm'
+          node-version-file: ".nvmrc"
+          cache: "npm"
+          registry-url: "https://registry.npmjs.org"
 
-      - name: Bump version & decide publish flags
-        id: pkg
+      - name: Install deps
+        run: npm ci --no-fund --no-audit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Security audit (runtime deps)
+        run: npm run audit:npm
+
+      - name: Build
+        run: npm run build --if-present
+
+      - name: Test with coverage
+        run: |
+          set -euo pipefail
+
+          if node -e "const s=(require('./package.json').scripts||{})['test:coverage']||''; process.exit(s.includes('vitest') ? 0 : 1)"; then
+            npm run test:coverage -- --coverage.reporter=lcov --coverage.reporter=text-summary
+          elif node -e "const s=(require('./package.json').scripts||{})['test:coverage']||''; process.exit(s ? 0 : 1)"; then
+            npm run test:coverage
+          elif node -e "const s=(require('./package.json').scripts||{}).test||''; process.exit(s.includes('vitest') ? 0 : 1)"; then
+            npm run test -- --coverage --coverage.reporter=lcov --coverage.reporter=text-summary
+          else
+            npm run test -- --coverage
+          fi
+
+      - name: Upload coverage to Codecov
+        if: ${{ hashFiles('coverage/lcov.info') != '' }}
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage/lcov.info
+          flags: unittests
+          use_oidc: true
+          fail_ci_if_error: false
+
+      - name: Prepare release metadata
+        id: release
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           BUMP: ${{ inputs.bump }}
           PREID: ${{ inputs.preid }}
         run: |
           set -euo pipefail
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Decide bump command
-          BUMP_CMD=""
-          case "${BUMP:-patch}" in
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          PACKAGE_ACCESS=$(node -p "(require('./package.json').publishConfig||{}).access||''")
+
+          case "${BUMP:-none}" in
             major|minor|patch)
-              if [ -n "${PREID:-}" ]; then
-                # Convert to pre* if preid provided
-                case "${BUMP}" in
-                  major) BUMP_CMD="npm version premajor --preid ${PREID} -m 'chore: release v%s [skip ci]'" ;;
-                  minor) BUMP_CMD="npm version preminor --preid ${PREID} -m 'chore: release v%s [skip ci]'" ;;
-                  patch) BUMP_CMD="npm version prepatch --preid ${PREID} -m 'chore: release v%s [skip ci]'" ;;
-                esac
-              else
-                BUMP_CMD="npm version ${BUMP} -m 'chore: release v%s [skip ci]'"
-              fi
+              echo "Protected main requires version changes through a release-prep PR." >&2
+              echo "Bump package.json/package-lock.json via PR, merge it, then rerun CD with bump=none." >&2
+              exit 1
               ;;
             none)
-              # No version bump; use existing version
-              BUMP_CMD="echo"
+              echo "No version bump requested."
               ;;
             *)
               echo "Unknown bump type: ${BUMP}" >&2
@@ -130,185 +112,99 @@ jobs:
               ;;
           esac
 
-          if [ "${BUMP}" = "none" ]; then
-            CURRENT_VER=$(node -p "require('./package.json').version")
-            NEW_VER="v${CURRENT_VER}"
-          else
-            # shellcheck disable=SC2086
-            NEW_VER=$(sh -lc "$BUMP_CMD")
+          RELEASE_VERSION=$(node -p "require('./package.json').version")
+          RELEASE_TAG="v${RELEASE_VERSION}"
+          SHOULD_PUSH="false"
+
+          if ! git rev-parse "${RELEASE_TAG}" >/dev/null 2>&1; then
+            git tag "${RELEASE_TAG}"
+            SHOULD_PUSH="true"
           fi
 
-          echo "New version: $NEW_VER"
-          git push --follow-tags
-
-          # Expose tag (vX.Y.Z) and version (X.Y.Z) for later steps
-          VER_NO_V=${NEW_VER#v}
-          echo "tag=$NEW_VER" >> "$GITHUB_OUTPUT"
-          echo "version=$VER_NO_V" >> "$GITHUB_OUTPUT"
-
-          NAME=$(node -p "require('./package.json').name")
-          echo "name=$NAME" >> "$GITHUB_OUTPUT"
-          if npm view "$NAME" version >/dev/null 2>&1; then
-            echo "flags=" >> "$GITHUB_OUTPUT"
-          else
-            echo "flags=--access public" >> "$GITHUB_OUTPUT"
+          if npm view "${PACKAGE_NAME}@${RELEASE_VERSION}" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "Version already exists on npm: ${PACKAGE_NAME}@${RELEASE_VERSION}" >&2
+            exit 1
           fi
 
-      - name: Install deps (CI)
-        run: npm ci
+          echo "package_name=${PACKAGE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "package_access=${PACKAGE_ACCESS}" >> "$GITHUB_OUTPUT"
+          echo "release_version=${RELEASE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "should_push=${SHOULD_PUSH}" >> "$GITHUB_OUTPUT"
 
-      - name: Test (coverage)
-        run: npm run test -- --coverage
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-         token: ${{ secrets.CODECOV_TOKEN }}
-         files: ./coverage/lcov.info
-         flags: unittests
-         fail_ci_if_error: true
-
-      - name: Build
-        run: npm run build --if-present
+          echo "Prepared release ${PACKAGE_NAME}@${RELEASE_VERSION} (${RELEASE_TAG})"
 
       - name: Generate SBOM (CycloneDX)
         run: npm sbom --sbom-format=cyclonedx --sbom-type=library --omit dev > sbom.cdx.json
+        continue-on-error: true
 
-      - name: Attest SBOM (GitHub Artifact Attestations)
+      - name: Attest SBOM
+        if: ${{ hashFiles('sbom.cdx.json') != '' }}
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: sbom.cdx.json
 
-      - name: Update CHANGELOG.md (move Unreleased to new version)
+      - name: Push release tag
+        if: ${{ steps.release.outputs.should_push == 'true' }}
         env:
-          VERSION: ${{ steps.pkg.outputs.version }}
-          TAG: ${{ steps.pkg.outputs.tag }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          verbose: true
+          TAG: ${{ steps.release.outputs.release_tag }}
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git push origin "$TAG"
 
-          FILE="CHANGELOG.md"
-          if [ ! -f "$FILE" ]; then
-            echo "No CHANGELOG.md found; skipping changelog update."
-            exit 0
-          fi
-
-          if grep -q "^## \[${VERSION}\]" "$FILE"; then
-            echo "CHANGELOG.md already contains a ${VERSION} release section; skipping changelog update."
-            exit 0
-          fi
-
-          DATE=$(date -u +%Y-%m-%d)
-          VERSION_LINE="## [${VERSION}] - ${DATE}"
-
-          # Identify Unreleased block boundaries
-          UNREL_START=$(grep -n '^## \[Unreleased\]' "$FILE" | cut -d: -f1 || true)
-          if [ -z "$UNREL_START" ]; then
-            echo "No '## [Unreleased]' section found; skipping changelog update."
-            exit 0
-          fi
-          NEXT_HDR=$(awk 'NR>'"$UNREL_START"' && /^## \[/{print NR; exit}' "$FILE")
-          if [ -z "$NEXT_HDR" ]; then
-            NEXT_HDR=$(wc -l < "$FILE")
-            NEXT_HDR=$((NEXT_HDR+1))
-          fi
-
-          # Extract sections
-          HEADER=$(sed -n "1,${UNREL_START}p" "$FILE")
-          UNREL_CONTENT=$(sed -n "$((UNREL_START+1)),$((NEXT_HDR-1))p" "$FILE")
-          TAIL=$(sed -n "${NEXT_HDR},\$p" "$FILE")
-
-          # Prepare new Unreleased template (Keep a Changelog style) without tabs/indent issues
-          NEW_UNRELEASED=$(printf '%s\n' \
-            '' \
-            '- **Added**' \
-            '  - (placeholder)' \
-            '' \
-            '- **Changed**' \
-            '  - (placeholder)' \
-            '' \
-            '- **Fixed**' \
-            '  - (placeholder)' \
-            '' \
-            '- **Security**' \
-            '  - (placeholder)')
-
-          # Build the new CHANGELOG content
-          TMP_FILE=$(mktemp)
-          {
-            printf "%s\n" "$HEADER"
-            printf "%s\n\n" "$NEW_UNRELEASED"
-            printf "%s\n" "$VERSION_LINE"
-            # If Unreleased was empty, at least add a placeholder so the section isn't blank
-            if [ -z "$(echo "$UNREL_CONTENT" | tr -d '\n' | tr -d '[:space:]')" ]; then
-              printf "### Changed\n- (no notable changes)\n\n"
-            else
-              printf "%s\n" "$UNREL_CONTENT"
-              # Ensure a trailing newline after the inserted section
-              printf "\n"
-            fi
-            printf "%s\n" "$TAIL"
-          } > "$TMP_FILE"
-
-          mv "$TMP_FILE" "$FILE"
-
-          # Update bottom compare links
-          # Update [Unreleased] compare to start at v${VERSION}
-          COMPARE_URL="https://github.com/${GITHUB_REPOSITORY}/compare/v${VERSION}...HEAD"
-          awk -v repl="[Unreleased]: ${COMPARE_URL}" 'BEGIN{OFS=FS} { if ($0 ~ /^\[Unreleased\]: /) { print repl } else { print } }' "$FILE" > "$FILE.tmp"
-          mv "$FILE.tmp" "$FILE"
-
-          # Append a link for the new version if not present
-          if ! grep -q "^\[${VERSION}\]:" "$FILE"; then
-            echo "[${VERSION}]: https://github.com/${GITHUB_REPOSITORY}/releases/tag/v${VERSION}" >> "$FILE"
-          fi
-
-          git add "$FILE"
-          git commit -m "docs(changelog): release v${VERSION}"
-          git push
-
-      - name: Create GitHub Release draft (immutable-safe)
+      - name: Create GitHub Release draft
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.release_tag }}
         run: |
           set -euo pipefail
-          TAG="${{ steps.pkg.outputs.tag }}"
+
           if gh release view "$TAG" >/dev/null 2>&1; then
             IS_DRAFT="$(gh release view "$TAG" --json isDraft --jq '.isDraft')"
             if [ "$IS_DRAFT" != "true" ]; then
-              echo "Release $TAG already exists and is published. Immutable releases cannot be modified after publication; cut a new version instead."
+              echo "Release $TAG already exists and is published. Cut a new version instead."
               exit 1
             fi
 
             echo "Draft release $TAG already exists; refreshing mutable assets."
-            if [ -f sbom.cdx.json ]; then
+            if [ -s sbom.cdx.json ]; then
               gh release upload "$TAG" sbom.cdx.json --clobber
             else
-              echo "No SBOM generated; leaving existing draft assets unchanged."
+              echo "Skipping SBOM release upload (file missing or empty)."
             fi
           else
-            if [ -f sbom.cdx.json ]; then
-              gh release create "$TAG" sbom.cdx.json                 --title "Release $TAG"                 --generate-notes                 --verify-tag                 --draft
+            if [ -s sbom.cdx.json ]; then
+              gh release create "$TAG" sbom.cdx.json --title "Release $TAG" --generate-notes --verify-tag --draft
             else
-              gh release create "$TAG"                 --title "Release $TAG"                 --generate-notes                 --verify-tag                 --draft
+              gh release create "$TAG" --title "Release $TAG" --generate-notes --verify-tag --draft
             fi
           fi
 
-      - name: Publish
+      - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PACKAGE_ACCESS: ${{ steps.release.outputs.package_access }}
         run: |
-          npm publish ${{ steps.pkg.outputs.flags }} --provenance
+          set -euo pipefail
+
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN is required" >&2
+            exit 1
+          fi
+
+          if [ "${PACKAGE_ACCESS}" = "public" ]; then
+            npm publish --access public --provenance --registry https://registry.npmjs.org
+          else
+            npm publish --provenance --registry https://registry.npmjs.org
+          fi
 
       - name: Publish GitHub Release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.release_tag }}
         run: |
           set -euo pipefail
-          TAG="${{ steps.pkg.outputs.tag }}"
+
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             echo "Expected draft release $TAG to exist before publication."
             exit 1
