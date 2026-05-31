@@ -76,7 +76,7 @@ jobs:
 
       - name: Upload coverage to Codecov
         if: ${{ hashFiles('coverage/lcov.info') != '' }}
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238
         with:
           files: ./coverage/lcov.info
           flags: unittests
@@ -119,6 +119,14 @@ jobs:
           if ! git rev-parse "${RELEASE_TAG}" >/dev/null 2>&1; then
             git tag "${RELEASE_TAG}"
             SHOULD_PUSH="true"
+          else
+            TAG_COMMIT="$(git rev-list -n 1 "${RELEASE_TAG}")"
+            HEAD_COMMIT="$(git rev-parse HEAD)"
+            if [ "${TAG_COMMIT}" != "${HEAD_COMMIT}" ]; then
+              echo "Release tag ${RELEASE_TAG} already points at ${TAG_COMMIT}, not current HEAD ${HEAD_COMMIT}." >&2
+              echo "Cut a new package version or rerun from the tagged commit before publishing." >&2
+              exit 1
+            fi
           fi
 
           if npm view "${PACKAGE_NAME}@${RELEASE_VERSION}" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
