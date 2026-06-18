@@ -132,6 +132,7 @@ npm run pack:check
 
 ## Governance
 
+- Contributing guidance: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
 - Security policy: [`SECURITY.md`](./SECURITY.md)
 - Code of conduct: [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md)
 - ADRs: [`docs/adrs`](./docs/adrs)
