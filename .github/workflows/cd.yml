@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: "Version bump type. Use none after a release-prep PR on protected main."
+        description: "Version bump type"
         required: true
         type: choice
-        default: none
+        default: patch
         options:
           - patch
           - minor
@@ -19,208 +19,217 @@ on:
         type: string
 
 permissions:
+  actions: read
+  attestations: write
   contents: write
   id-token: write
-  attestations: write
+  pull-requests: write
 
 concurrency:
-  group: npm-cd-${{ github.ref }}
+  group: npm-cd-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
+  prepare_release:
+    uses: ./.github/workflows/release-prepare.yml
+    with:
+      bump: ${{ inputs.bump }}
+      preid: ${{ inputs.preid }}
+    secrets: inherit
+
   publish:
+    needs: prepare_release
     runs-on: ubuntu-latest
     environment: production
-
     steps:
-      - name: Checkout
+      - name: Checkout prepared release commit
         uses: actions/checkout@v4
         with:
+          ref: ${{ needs.prepare_release.outputs.commit_sha }}
           fetch-depth: 0
 
-      - name: Use Node.js
+      - name: Use Node.js 24
         uses: actions/setup-node@v4
         with:
           node-version-file: ".nvmrc"
-          cache: "npm"
           registry-url: "https://registry.npmjs.org"
+          cache: npm
 
-      - name: Install deps
-        run: npm ci --no-fund --no-audit
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Security audit (runtime deps)
-        run: npm run audit:npm
-
-      - name: Build
-        run: npm run build --if-present
-
-      - name: Test with coverage
-        run: |
-          set -euo pipefail
-
-          if node -e "const s=(require('./package.json').scripts||{})['test:coverage']||''; process.exit(s.includes('vitest') ? 0 : 1)"; then
-            npm run test:coverage -- --coverage.reporter=lcov --coverage.reporter=text-summary
-          elif node -e "const s=(require('./package.json').scripts||{})['test:coverage']||''; process.exit(s ? 0 : 1)"; then
-            npm run test:coverage
-          elif node -e "const s=(require('./package.json').scripts||{}).test||''; process.exit(s.includes('vitest') ? 0 : 1)"; then
-            npm run test -- --coverage --coverage.reporter=lcov --coverage.reporter=text-summary
-          else
-            npm run test -- --coverage
-          fi
-
-      - name: Upload coverage to Codecov
-        if: ${{ hashFiles('coverage/lcov.info') != '' }}
-        uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238
-        with:
-          files: ./coverage/lcov.info
-          flags: unittests
-          use_oidc: true
-          fail_ci_if_error: false
-
-      - name: Prepare release metadata
+      - name: Use prepared release metadata
         id: release
-        env:
-          BUMP: ${{ inputs.bump }}
-          PREID: ${{ inputs.preid }}
         run: |
           set -euo pipefail
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          PACKAGE_NAME=$(node -p "require('./package.json').name")
-          PACKAGE_ACCESS=$(node -p "(require('./package.json').publishConfig||{}).access||''")
-
-          case "${BUMP:-none}" in
-            major|minor|patch)
-              echo "Protected main requires version changes through a release-prep PR." >&2
-              echo "Bump package.json/package-lock.json via PR, merge it, then rerun CD with bump=none." >&2
-              exit 1
-              ;;
-            none)
-              echo "No version bump requested."
-              ;;
-            *)
-              echo "Unknown bump type: ${BUMP}" >&2
-              exit 1
-              ;;
-          esac
-
-          RELEASE_VERSION=$(node -p "require('./package.json').version")
-          RELEASE_TAG="v${RELEASE_VERSION}"
-          SHOULD_PUSH="false"
-
-          if ! git rev-parse "${RELEASE_TAG}" >/dev/null 2>&1; then
-            git tag "${RELEASE_TAG}"
-            SHOULD_PUSH="true"
-          else
-            TAG_COMMIT="$(git rev-list -n 1 "${RELEASE_TAG}")"
-            HEAD_COMMIT="$(git rev-parse HEAD)"
-            if [ "${TAG_COMMIT}" != "${HEAD_COMMIT}" ]; then
-              echo "Release tag ${RELEASE_TAG} already points at ${TAG_COMMIT}, not current HEAD ${HEAD_COMMIT}." >&2
-              echo "Cut a new package version or rerun from the tagged commit before publishing." >&2
-              exit 1
-            fi
+          PUBLISHED="${{ needs.prepare_release.outputs.published }}"
+          SHOULD_PUBLISH_NPM="true"
+          SKIP_REASON=""
+          if [ "${PUBLISHED}" = "true" ]; then
+            SHOULD_PUBLISH_NPM="false"
+            SKIP_REASON="Package version ${{ needs.prepare_release.outputs.version }} is already published; nothing to release."
           fi
 
-          if npm view "${PACKAGE_NAME}@${RELEASE_VERSION}" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
-            echo "Version already exists on npm: ${PACKAGE_NAME}@${RELEASE_VERSION}" >&2
-            exit 1
+          {
+            echo "package_name=${{ needs.prepare_release.outputs.name }}"
+            echo "release_version=${{ needs.prepare_release.outputs.version }}"
+            echo "release_tag=${{ needs.prepare_release.outputs.tag }}"
+            echo "flags=${{ needs.prepare_release.outputs.flags }}"
+            echo "should_publish_npm=${SHOULD_PUBLISH_NPM}"
+            echo "should_finalize_release=true"
+            echo "skip_reason=${SKIP_REASON}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Skip when package version is already published
+        if: steps.release.outputs.should_publish_npm != 'true'
+        run: echo "${{ steps.release.outputs.skip_reason }}"
+
+      - name: Install dependencies
+        if: steps.release.outputs.should_finalize_release == 'true'
+        run: npm ci
+
+      - name: Run validation
+        if: steps.release.outputs.should_finalize_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          has_script() {
+            node -e "const scripts = require('./package.json').scripts || {}; process.exit(scripts[process.argv[1]] ? 0 : 1)" "$1"
+          }
+
+          if has_script lint; then npm run lint; fi
+          if has_script typecheck; then npm run typecheck; fi
+          if has_script audit:npm; then npm run audit:npm; fi
+          if has_script build; then npm run build; fi
+          if has_script test:coverage; then
+            npm run test:coverage
+          elif has_script test; then
+            npm test
           fi
-
-          echo "package_name=${PACKAGE_NAME}" >> "$GITHUB_OUTPUT"
-          echo "package_access=${PACKAGE_ACCESS}" >> "$GITHUB_OUTPUT"
-          echo "release_version=${RELEASE_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
-          echo "should_push=${SHOULD_PUSH}" >> "$GITHUB_OUTPUT"
-
-          echo "Prepared release ${PACKAGE_NAME}@${RELEASE_VERSION} (${RELEASE_TAG})"
+          if has_script pack:check; then npm run pack:check; fi
 
       - name: Generate SBOM (CycloneDX)
+        if: steps.release.outputs.should_finalize_release == 'true'
         run: npm sbom --sbom-format=cyclonedx --sbom-type=library --omit dev > sbom.cdx.json
-        continue-on-error: true
 
       - name: Attest SBOM
-        if: ${{ hashFiles('sbom.cdx.json') != '' }}
+        if: steps.release.outputs.should_finalize_release == 'true' && hashFiles('sbom.cdx.json') != ''
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: sbom.cdx.json
 
-      - name: Push release tag
-        if: ${{ steps.release.outputs.should_push == 'true' }}
-        env:
-          TAG: ${{ steps.release.outputs.release_tag }}
-        run: |
-          set -euo pipefail
-          git push origin "$TAG"
-
-      - name: Create GitHub Release draft
+      - name: Ensure release tag points at prepared commit
+        if: steps.release.outputs.should_finalize_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.release.outputs.release_tag }}
+          PUBLISHED: ${{ needs.prepare_release.outputs.published }}
         run: |
           set -euo pipefail
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            IS_DRAFT="$(gh release view "$TAG" --json isDraft --jq '.isDraft')"
-            if [ "$IS_DRAFT" != "true" ]; then
-              echo "Release $TAG already exists and is published. Cut a new version instead."
-              exit 1
+          HEAD_SHA="$(git rev-parse HEAD)"
+          git fetch origin --tags --force
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}" --force
+            TAG_SHA="$(git rev-list -n 1 "${TAG}")"
+            if [ "${TAG_SHA}" = "${HEAD_SHA}" ]; then
+              echo "Tag ${TAG} already points at prepared commit ${HEAD_SHA}."
+              exit 0
             fi
 
-            echo "Draft release $TAG already exists; refreshing mutable assets."
-            if [ -s sbom.cdx.json ]; then
-              gh release upload "$TAG" sbom.cdx.json --clobber
-            else
-              echo "Skipping SBOM release upload (file missing or empty)."
+            if [ "${PUBLISHED}" = "true" ]; then
+              echo "Package is already published; preserving existing tag ${TAG} at ${TAG_SHA}."
+              exit 0
             fi
-          else
-            if [ -s sbom.cdx.json ]; then
-              gh release create "$TAG" sbom.cdx.json --title "Release $TAG" --generate-notes --verify-tag --draft
-            else
-              gh release create "$TAG" --title "Release $TAG" --generate-notes --verify-tag --draft
+
+            if gh release view "${TAG}" >/dev/null 2>&1; then
+              IS_DRAFT="$(gh release view "${TAG}" --json isDraft --jq '.isDraft')"
+              if [ "${IS_DRAFT}" != "true" ]; then
+                echo "Release ${TAG} already exists and is published at ${TAG_SHA}; cut a new version instead." >&2
+                exit 1
+              fi
             fi
+
+            echo "Replacing stale unpublished tag ${TAG}."
+            git push origin ":refs/tags/${TAG}"
+            git tag -d "${TAG}" >/dev/null 2>&1 || true
+          elif [ "${PUBLISHED}" = "true" ]; then
+            echo "Package is already published but tag ${TAG} is missing; cannot safely recreate a release tag after npm publication." >&2
+            exit 1
           fi
 
-      - name: Publish to npm
+          git tag "${TAG}" "${HEAD_SHA}"
+          git push origin "${TAG}"
+
+      - name: Create GitHub Release draft
+        if: steps.release.outputs.should_finalize_release == 'true'
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          PACKAGE_ACCESS: ${{ steps.release.outputs.package_access }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.release_tag }}
+          PREID: ${{ inputs.preid }}
         run: |
           set -euo pipefail
 
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            IS_DRAFT="$(gh release view "${TAG}" --json isDraft --jq '.isDraft')"
+            if [ "${IS_DRAFT}" != "true" ]; then
+              echo "Release ${TAG} is already published; nothing to recover."
+              exit 0
+            fi
+
+            if [ -s sbom.cdx.json ]; then
+              gh release upload "${TAG}" sbom.cdx.json --clobber
+            fi
+            exit 0
+          fi
+
+          ARGS=(--title "Release ${TAG}" --generate-notes --verify-tag --draft)
+          if [ -n "${PREID}" ]; then
+            ARGS+=(--prerelease)
+          fi
+
+          if [ -s sbom.cdx.json ]; then
+            gh release create "${TAG}" sbom.cdx.json "${ARGS[@]}"
+          else
+            gh release create "${TAG}" "${ARGS[@]}"
+          fi
+
+      - name: Publish package
+        if: steps.release.outputs.should_publish_npm == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          FLAGS: ${{ steps.release.outputs.flags }}
+          PACKAGE_NAME: ${{ steps.release.outputs.package_name }}
+          PACKAGE_VERSION: ${{ steps.release.outputs.release_version }}
+        run: |
+          set -euo pipefail
           if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
             echo "NPM_TOKEN is required" >&2
             exit 1
           fi
 
-          if [ "${PACKAGE_ACCESS}" = "public" ]; then
-            npm publish --access public --provenance --registry https://registry.npmjs.org
-          else
-            npm publish --provenance --registry https://registry.npmjs.org
+          if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "${PACKAGE_NAME}@${PACKAGE_VERSION} already exists on npm; skipping duplicate publish."
+            exit 0
           fi
 
+          npm publish ${FLAGS} --provenance --registry https://registry.npmjs.org
+
       - name: Publish GitHub Release
+        if: steps.release.outputs.should_finalize_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.release.outputs.release_tag }}
+          PREID: ${{ inputs.preid }}
         run: |
           set -euo pipefail
-
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Expected draft release $TAG to exist before publication."
+          if ! gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Expected draft release ${TAG} to exist before publication." >&2
             exit 1
           fi
 
-          IS_DRAFT="$(gh release view "$TAG" --json isDraft --jq '.isDraft')"
-          if [ "$IS_DRAFT" = "true" ]; then
-            gh release edit "$TAG" --draft=false --latest
+          if [ -n "${PREID}" ]; then
+            gh release edit "${TAG}" --draft=false --prerelease
           else
-            echo "Release $TAG is already published; skipping publication."
+            gh release edit "${TAG}" --draft=false --latest
           fi
