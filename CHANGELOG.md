@@ -7,6 +7,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 - **Added**
+  - (placeholder)
+
+- **Changed**
+  - (placeholder)
+
+- **Fixed**
+  - (placeholder)
+
+- **Security**
+  - (placeholder)
+
+## [1.0.17] - 2026-06-22
+
+- **Added**
   - Added package-owned `en-GB` API error translations and helper exports backed by `@plasius/translations`.
   - Restored repository `CONTRIBUTING.md` with workflow and validation guidance for local contributors.
 
@@ -228,7 +242,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Initial public release scaffold for `@plasius/api`.
 
-[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.0.14...HEAD
+[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.0.17...HEAD
 [1.0.0]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.0
 [1.0.1]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.1
 [1.0.2]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.2
@@ -242,3 +256,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [1.0.12]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.12
 [1.0.13]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.13
 [1.0.14]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.14
+[1.0.17]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.17
