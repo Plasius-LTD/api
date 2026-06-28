@@ -10,6 +10,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - (placeholder)
 
 - **Changed**
+  - (placeholder)
+
+- **Fixed**
+  - (placeholder)
+
+- **Security**
+  - (placeholder)
+
+## [1.0.19] - 2026-06-28
+
+- **Added**
+  - (placeholder)
+
+- **Changed**
   - Refreshed development dependency baselines to `@types/node@26.0.1`, `@typescript-eslint/*@8.62.0`, and `eslint@10.6.0`.
 
 - **Fixed**
@@ -256,7 +270,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Initial public release scaffold for `@plasius/api`.
 
-[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.0.18...HEAD
+[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.0.19...HEAD
 [1.0.0]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.0
 [1.0.1]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.1
 [1.0.2]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.2
@@ -272,3 +286,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [1.0.14]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.14
 [1.0.17]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.17
 [1.0.18]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.18
+[1.0.19]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.19
