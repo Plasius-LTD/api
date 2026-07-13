@@ -11,6 +11,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Changed**
   - (placeholder)
+
+- **Fixed**
+  - (placeholder)
+
+- **Security**
+  - (placeholder)
+
+## [1.0.20] - 2026-07-13
+
+- **Added**
+  - (placeholder)
+
+- **Changed**
+  - (placeholder)
   - Consume the RFC-remediated `@plasius/translations` release (task #30).
 
 - **Fixed**
@@ -271,7 +285,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Initial public release scaffold for `@plasius/api`.
 
-[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.0.19...HEAD
+[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.0.20...HEAD
 [1.0.0]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.0
 [1.0.1]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.1
 [1.0.2]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.2
@@ -288,3 +302,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [1.0.17]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.17
 [1.0.18]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.18
 [1.0.19]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.19
+[1.0.20]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.20
