@@ -73,7 +73,7 @@
   "homepage": "https://github.com/Plasius-LTD/api#readme",
   "dependencies": {
     "@azure/functions": "^4.14.0",
-    "@plasius/translations": "^1.0.17",
+    "@plasius/translations": "^1.0.23",
     "ioredis": "^5.10.1"
   },
   "devDependencies": {
