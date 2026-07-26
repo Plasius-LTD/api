@@ -126,9 +126,20 @@ npm run pack:check
 
 1. Update `CHANGELOG.md` under `Unreleased`.
 2. Run `npm ci && npm run clean && npm run build && npm test && npm run pack:check`.
-3. Bump `package.json` version.
-4. Tag and push (`vX.Y.Z`).
-5. Publish through the CD workflow (recommended) or `npm publish`.
+3. Bind the npm trusted publisher for `@plasius/api` to repository
+   `Plasius-LTD/api`, workflow `cd.yml`, and environment `production`.
+4. Run the GitHub `cd.yml` workflow on `main`; it owns versioning, tagging, and
+   publication through the `production` environment.
+
+Publication uses Node 24.18.0 LTS. Do not publish from a local machine or
+configure a long-lived npm token.
+
+## Public Artifact Integrity
+
+CI rejects the administrative contributor-registry path from both the exact Git
+index and the npm dry-run inventory without reading its contents. CI runs on the
+approved self-hosted runner group; package publication runs only through the
+GitHub-hosted `production` CD job using npm OIDC trusted publishing.
 
 ## Governance
 

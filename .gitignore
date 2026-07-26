@@ -16,3 +16,5 @@ __azurite_db*__.json
 **/certs/**/*-key.pem
 **/certs/**/*.key
 **/certs/**/*.p8
+
+/legal/CLA-REGISTRY.csv
