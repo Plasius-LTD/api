@@ -70,5 +70,30 @@ describe("transport security helpers", () => {
     expect(headers.get("x-content-type-options")).toBe("nosniff");
     expect(headers.get("x-frame-options")).toBe("DENY");
     expect(headers.get("content-security-policy")).toContain("default-src 'none'");
+    expect(headers.get("cross-origin-opener-policy")).toBe("same-origin");
+  });
+
+  it("supports the bounded OAuth popup opener policy", () => {
+    const headers = new Headers();
+
+    applyBaselineSecurityHeaders(headers, {
+      crossOriginOpenerPolicy: "same-origin-allow-popups",
+    });
+
+    expect(headers.get("cross-origin-opener-policy")).toBe(
+      "same-origin-allow-popups"
+    );
+    expect(headers.get("cross-origin-resource-policy")).toBe("same-site");
+    expect(headers.get("content-security-policy")).toContain("default-src 'none'");
+  });
+
+  it("falls back to the strict opener policy for unsupported runtime values", () => {
+    const headers = new Headers();
+
+    applyBaselineSecurityHeaders(headers, {
+      crossOriginOpenerPolicy: "unsafe-none",
+    } as never);
+
+    expect(headers.get("cross-origin-opener-policy")).toBe("same-origin");
   });
 });

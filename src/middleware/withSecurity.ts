@@ -10,12 +10,18 @@ import {
   isHttpsRequest,
   isInsecureLocalRequest,
   shouldEnforceHttps,
+  type BaselineSecurityHeaderOptions,
 } from "./transportSecurity.js";
-export function withSecurity(): Middleware {
+
+export type { BaselineSecurityHeaderOptions } from "./transportSecurity.js";
+
+export function withSecurity(
+  options: BaselineSecurityHeaderOptions = {}
+): Middleware {
   return async (request: HttpRequest, context: InvocationContext) => {
     const { headers, cookies } = getExtraOutputs(context);
 
-    applyBaselineSecurityHeaders(headers);
+    applyBaselineSecurityHeaders(headers, options);
 
     context.extraOutputs.set("headers", headers);
 

@@ -3,6 +3,8 @@ export {
   isHttpsRequest,
   isInsecureLocalRequest,
   shouldEnforceHttps,
+  type BaselineSecurityHeaderOptions,
+  type CrossOriginOpenerPolicy,
 } from "./middleware/transportSecurity.js";
 export * from "./middleware/index.js";
 
