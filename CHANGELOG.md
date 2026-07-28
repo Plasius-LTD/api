@@ -14,7 +14,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - Refreshed transitive dependency resolutions to clear the current high-severity npm audit findings.
 
 - **Fixed**
-  - (placeholder)
+  - Added a bounded `same-origin-allow-popups` transport-security option for
+    cross-origin OAuth popup handshakes while preserving `same-origin` as the
+    fail-closed default.
 
 - **Security**
   - Added exact Git-index and npm-package inventory gates that reject the administrative contributor-registry path without reading it, and removed that path from the current source tip.

@@ -299,6 +299,23 @@ describe("withSecurity", () => {
     expect(headers.get("x-frame-options")).toBe("DENY");
   });
 
+  it("applies the OAuth popup opener policy without weakening other headers", async () => {
+    const context = createContext();
+    const request = createRequest();
+
+    const shouldContinue = await withSecurity({
+      crossOriginOpenerPolicy: "same-origin-allow-popups",
+    })(request, context);
+    const headers = context.extraOutputs.get("headers") as Headers;
+
+    expect(shouldContinue).toBe(true);
+    expect(headers.get("cross-origin-opener-policy")).toBe(
+      "same-origin-allow-popups"
+    );
+    expect(headers.get("x-frame-options")).toBe("DENY");
+    expect(headers.get("content-security-policy")).toContain("default-src 'none'");
+  });
+
   it("rejects insecure non-local requests when https is enforced", async () => {
     process.env.NODE_ENV = "production";
     process.env.ENFORCE_HTTPS = "true";
@@ -316,6 +333,28 @@ describe("withSecurity", () => {
     expect(http.status).toBe(426);
     expect(http.body).toBe("HTTPS is required.");
     expect(headers.get(API_ERROR_KEY_HEADER)).toBe(apiErrorTranslationKeys.httpsRequired);
+  });
+
+  it("retains the OAuth popup opener policy on https rejection responses", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.ENFORCE_HTTPS = "true";
+
+    const context = createContext();
+    const request = createRequest("GET", "http://api.example.com/oauth/start", {
+      host: "api.example.com",
+    });
+
+    const shouldContinue = await withSecurity({
+      crossOriginOpenerPolicy: "same-origin-allow-popups",
+    })(request, context);
+    const http = context.extraOutputs.get("http") as HttpResponseInit;
+    const headers = http.headers as Headers;
+
+    expect(shouldContinue).toBe(false);
+    expect(http.status).toBe(426);
+    expect(headers.get("cross-origin-opener-policy")).toBe(
+      "same-origin-allow-popups"
+    );
   });
 });
 

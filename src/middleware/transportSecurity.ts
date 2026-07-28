@@ -2,6 +2,14 @@ import type { HttpRequest } from "@azure/functions";
 
 const FORWARDED_PROTO_PATTERN = /(?:^|;)\s*proto=(?:"?)(https|http)(?:"?)(?:;|$)/i;
 
+export type CrossOriginOpenerPolicy =
+  | "same-origin"
+  | "same-origin-allow-popups";
+
+export interface BaselineSecurityHeaderOptions {
+  crossOriginOpenerPolicy?: CrossOriginOpenerPolicy;
+}
+
 function firstHeaderValue(value: string | null): string | null {
   if (!value) return null;
   const first = value.split(",")[0]?.trim();
@@ -80,7 +88,15 @@ export function shouldEnforceHttps(): boolean {
   return process.env.NODE_ENV === "production";
 }
 
-export function applyBaselineSecurityHeaders(headers: Headers): void {
+export function applyBaselineSecurityHeaders(
+  headers: Headers,
+  options: BaselineSecurityHeaderOptions = {}
+): void {
+  const crossOriginOpenerPolicy =
+    options.crossOriginOpenerPolicy === "same-origin-allow-popups"
+      ? "same-origin-allow-popups"
+      : "same-origin";
+
   headers.set("X-Content-Type-Options", "nosniff");
   headers.set("X-Frame-Options", "DENY");
   headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
@@ -93,7 +109,7 @@ export function applyBaselineSecurityHeaders(headers: Headers): void {
     "max-age=63072000; includeSubDomains; preload"
   );
   headers.set("X-DNS-Prefetch-Control", "off");
-  headers.set("Cross-Origin-Opener-Policy", "same-origin");
+  headers.set("Cross-Origin-Opener-Policy", crossOriginOpenerPolicy);
   headers.set("Cross-Origin-Resource-Policy", "same-site");
   headers.set(
     "Content-Security-Policy",

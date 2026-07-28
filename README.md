@@ -29,11 +29,23 @@ Public generic API helper package.
 ## Transport Security Baseline
 
 - Exports helper functions:
-  - `applyBaselineSecurityHeaders(headers)`
+  - `applyBaselineSecurityHeaders(headers, options?)`
   - `isHttpsRequest(request)`
   - `isInsecureLocalRequest(request)`
   - `shouldEnforceHttps()`
 - These helpers support strict header policy and HTTPS enforcement behavior for callers.
+- `Cross-Origin-Opener-Policy` defaults to `same-origin`. OAuth routes that
+  navigate a cross-origin identity-provider popup may opt into the bounded
+  `same-origin-allow-popups` value without changing the remaining baseline:
+
+```ts
+applyBaselineSecurityHeaders(headers, {
+  crossOriginOpenerPolicy: "same-origin-allow-popups",
+});
+```
+
+- `withSecurity(options?)` accepts the same bounded option. Unsupported runtime
+  values fail closed to `same-origin`.
 
 ## Session Helper Baseline
 
