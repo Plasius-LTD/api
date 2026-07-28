@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Changed**
   - Standardized CI and trusted npm publication on Node 24.18.0 LTS.
   - Refreshed transitive dependency resolutions to clear the current high-severity npm audit findings.
+  - Documented the workflow-restricted public CI runner contract and enabled
+    supported manual retries of the existing CI workflow.
 
 - **Fixed**
   - Added a bounded `same-origin-allow-popups` transport-security option for

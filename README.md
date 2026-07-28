@@ -158,6 +158,8 @@ GitHub-hosted `production` CD job using npm OIDC trusted publishing.
 - Contributing guidance: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
 - Security policy: [`SECURITY.md`](./SECURITY.md)
 - Code of conduct: [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md)
+- Public CI runner operations:
+  [`docs/public-ci-runner-access.md`](./docs/public-ci-runner-access.md)
 - ADRs: [`docs/adrs`](./docs/adrs)
 - CLA and legal docs: [`legal`](./legal)
 
