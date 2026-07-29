@@ -139,9 +139,11 @@ npm run pack:check
 1. Update `CHANGELOG.md` under `Unreleased`.
 2. Run `npm ci && npm run clean && npm run build && npm test && npm run pack:check`.
 3. Bind the npm trusted publisher for `@plasius/api` to repository
-   `Plasius-LTD/api`, workflow `cd.yml`, and environment `production`.
-4. Run the GitHub `cd.yml` workflow on `main`; it owns versioning, tagging, and
-   publication through the `production` environment.
+   `Plasius-LTD/api`, workflow `cd.yml`, environment `production`, and the
+   `npm publish` action.
+4. Dispatch `cd.yml` from protected `main` with `phase: prepare`. It owns
+   versioning, the release pull request, exact-SHA CI admission, tagging, and
+   tokenless publication through the `production` environment.
 
 Publication uses Node 24.18.0 LTS. Do not publish from a local machine or
 configure a long-lived npm token.
@@ -149,9 +151,15 @@ configure a long-lived npm token.
 ## Public Artifact Integrity
 
 CI rejects the administrative contributor-registry path from both the exact Git
-index and the npm dry-run inventory without reading its contents. CI runs on the
-approved self-hosted runner group; package publication runs only through the
-GitHub-hosted `production` CD job using npm OIDC trusted publishing.
+index and the npm dry-run inventory without reading its contents. Same-repository
+pull requests and `main` run on the approved self-hosted runner group; fork code
+is never scheduled there. Release metadata lands through a unique pull request,
+then a second `cd.yml` run is dispatched from the exact successful `main` CI
+SHA. A read-only job validates and seals the package and SBOM before the
+GitHub-hosted `production` job verifies that immutable hand-off and publishes
+through npm OIDC with provenance. The privileged job runs no dependency or
+package lifecycle code, and no long-lived npm write token or fallback is
+configured. Rollback disables `cd.yml`.
 
 ## Governance
 

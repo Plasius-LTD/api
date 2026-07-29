@@ -10,13 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - (placeholder)
 
 - **Changed**
-  - (placeholder)
+  - Split release preparation from SHA-bound publication so npm provenance,
+    the release tag, package bytes, and successful `main` CI all identify the
+    same immutable commit.
 
 - **Fixed**
   - (placeholder)
 
 - **Security**
-  - (placeholder)
+  - Removed long-lived npm write-token configuration in favour of
+    workflow-bound OIDC trusted publishing, with dependency execution isolated
+    from the privileged production publication job.
 
 ## [1.0.21] - 2026-07-28
 
