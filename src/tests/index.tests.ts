@@ -14,6 +14,8 @@ import {
   isHttpsRequest,
   parseEncodedState,
   shouldEnforceHttps,
+  OpaqueProgressiveCooldownController,
+  DEFAULT_PROGRESSIVE_COOLDOWN_POLICY,
 } from "../index.js";
 
 describe("public API helper entrypoint", () => {
@@ -52,5 +54,16 @@ describe("public API helper entrypoint", () => {
     expect(typeof withCors).toBe("function");
     expect(typeof withRateLimiting).toBe("function");
     expect(typeof withValidatedParam).toBe("function");
+  });
+
+  it("exports opaque progressive cooldown controls", () => {
+    expect(typeof OpaqueProgressiveCooldownController).toBe("function");
+    expect(DEFAULT_PROGRESSIVE_COOLDOWN_POLICY.cooldownLadderMs).toEqual([
+      300_000,
+      900_000,
+      3_600_000,
+      21_600_000,
+      86_400_000,
+    ]);
   });
 });

@@ -7,7 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 - **Added**
-  - (placeholder)
+  - Added storage-agnostic opaque progressive-cooldown controls with atomic compare-and-swap reservations, immutable-acceptance verification, idempotent commit/release, bounded reconciliation and dependency deadlines, caller cancellation, exact retry timing, deterministic runtime dependencies, monotonic commit timestamps, and the default 5m → 15m → 1h → 6h → 24h ladder.
+  - Added the `@plasius/api/progressive-cooldown` public entrypoint and control-store contracts.
 
 - **Changed**
   - Split release preparation from SHA-bound publication so npm provenance,
@@ -24,6 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - Removed long-lived npm write-token configuration in favour of
     workflow-bound OIDC trusted publishing, with dependency execution isolated
     from the privileged production publication job.
+  - Restricted cooldown ingress to purpose/version-scoped 256-bit opaque subjects and random idempotency values, emitted canonical `fbs1` state keys and `fbr1` reservation IDs, persisted only second-order digests, enforced exact non-extendable temporal/deletion invariants, rejected clock arithmetic overflow and non-fresh CAS revisions, suppressed dependency details, and made store/verifier/corrupt-state failures fail closed.
 
 ## [1.0.21] - 2026-07-28
 

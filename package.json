@@ -31,6 +31,10 @@
       "types": "./dist/middleware/*.d.ts",
       "default": "./dist/middleware/*.js"
     },
+    "./progressive-cooldown": {
+      "types": "./dist/controls/progressiveCooldown.d.ts",
+      "default": "./dist/controls/progressiveCooldown.js"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {
