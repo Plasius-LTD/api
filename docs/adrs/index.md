@@ -7,3 +7,4 @@
 - [ADR-0005: Public Package Boundary and Publish Gates](./adr-0005-public-package-boundary-and-publish-gates.md)
 - [ADR-0006: Public Code Namespace Boundary](./adr-0006-public-code-namespace-boundary.md)
 - [ADR-0007: Bound OAuth Popup Opener Policy Overrides](./adr-0007-oauth-popup-opener-policy.md)
+- [ADR-0009: Exact-main OIDC package publishing](./adr-0009-exact-main-oidc-package-publishing.md)
