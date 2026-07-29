@@ -10,7 +10,6 @@
 
 Public generic API helper package.
 
-
 ## What this package contains
 
 - Public helper exports compiled to `dist/**`
@@ -116,8 +115,10 @@ Consumers must:
 - verify immutable acceptance from an identifier-isolated control/outbox
   projection before commit;
 - treat state keys and reservation records as pseudonymous personal data;
-- enforce `purgeAfterMs` as the store's upper-bound deletion TTL;
-- ensure soft-delete and backup windows do not extend beyond that deadline;
+- begin live deletion no later than
+  `hardDeleteByMs - PROGRESSIVE_COOLDOWN_PURGE_SAFETY_MS`;
+- ensure live data, soft-deleted copies, and backups are absent by
+  `hardDeleteByMs`;
 - exclude state, revisions, keys, and dependency exceptions from logs,
   analytics, Admin, MCP, and content storage.
 
@@ -125,11 +126,12 @@ Store/verifier outages and corrupt state fail closed with a bounded, non-reflect
 `unavailable` result. Only explicit revision conflicts are retried. See the
 [design](./docs/design/opaque-progressive-cooldown.md) and
 [ADR-0008](./docs/adrs/adr-0008-opaque-progressive-cooldown-reservations.md).
-Persisted leases, cooldowns, reconciliation retention, and aggregate purge
-deadlines are exact: shorter, longer, overflowing, non-canonical, future-event,
-or temporally regressive values are rejected. When the injected clock itself is
-invalid, `retryAfterSeconds` remains available but `retryAtMs` is intentionally
-omitted because no truthful absolute timestamp can be produced.
+Persisted leases, cooldowns, six-day default reconciliation retention, and the
+following fixed 24-hour deletion/backup safety window are exact: shorter,
+longer, overflowing, non-canonical, future-event, or temporally regressive
+values are rejected. When the injected clock itself is invalid,
+`retryAfterSeconds` remains available but `retryAtMs` is intentionally omitted
+because no truthful absolute timestamp can be produced.
 
 ## API Error Localization
 
@@ -138,10 +140,7 @@ omitted because no truthful absolute timestamp can be produced.
 - Text-body middleware responses keep their existing default English body and expose the key through the `x-plasius-error-key` response header.
 
 ```ts
-import {
-  apiErrorTranslationKeys,
-  createApiErrorResponse,
-} from "@plasius/api";
+import { apiErrorTranslationKeys, createApiErrorResponse } from "@plasius/api";
 
 const response = createApiErrorResponse(404, apiErrorTranslationKeys.notFound);
 ```
@@ -179,7 +178,11 @@ import {
 ```
 
 ```ts
-import { withCors, withRateLimiting, withMiddleware } from "@plasius/api/middleware";
+import {
+  withCors,
+  withRateLimiting,
+  withMiddleware,
+} from "@plasius/api/middleware";
 ```
 
 ```ts

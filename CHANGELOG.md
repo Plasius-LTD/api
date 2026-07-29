@@ -26,6 +26,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
     workflow-bound OIDC trusted publishing, with dependency execution isolated
     from the privileged production publication job.
   - Restricted cooldown ingress to purpose/version-scoped 256-bit opaque subjects and random idempotency values, emitted canonical `fbs1` state keys and `fbr1` reservation IDs, persisted only second-order digests, enforced exact non-extendable temporal/deletion invariants, rejected clock arithmetic overflow and non-fresh CAS revisions, suppressed dependency details, and made store/verifier/corrupt-state failures fail closed.
+  - Separated the default six-day live reconciliation period from a fixed final
+    24-hour deletion/backup safety window so stores begin deletion only after
+    reconciliation closes while still proving total removal within seven days.
 
 ## [1.0.21] - 2026-07-28
 

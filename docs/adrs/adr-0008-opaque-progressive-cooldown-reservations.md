@@ -35,6 +35,9 @@ Provide a purpose/version-scoped opaque reservation controller with:
 - reset after 48 quiet hours;
 - bounded dependency deadlines, caller cancellation, records, conflict retries,
   reconciliation, and retention;
+- a six-day default reconciliation horizon followed by a fixed 24-hour
+  deletion/backup safety window, with live deletion starting at the boundary
+  and total removal required within seven days;
 - exact, non-extendable temporal/retention invariants, monotonic commit times,
   and validated retained ladder history;
 - closed fail-safe results with no input or dependency-error reflection.
@@ -91,6 +94,8 @@ only storage primitive it requires.
   verifier.
 - Control state is still pseudonymous personal data and requires a dedicated
   privacy and retention boundary.
+- Store adapters must coordinate live TTL, soft deletion, and backup expiry
+  against both the reconciliation boundary and hard-delete deadline.
 - A delayed reconciliation commit conservatively starts its cooldown when the
   acceptance is confirmed, which can extend suppression by the reconciliation
   delay.

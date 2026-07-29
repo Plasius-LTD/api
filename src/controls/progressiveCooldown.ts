@@ -6,13 +6,15 @@ const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 
 export const MAX_PROGRESSIVE_COOLDOWN_MS = DAY_MS;
+/** Reserved for verified deletion and isolated-control backup expiry. */
+export const PROGRESSIVE_COOLDOWN_PURGE_SAFETY_MS = DAY_MS;
 
 export interface ProgressiveCooldownPolicy {
   readonly cooldownLadderMs: readonly number[];
   readonly resetAfterMs: number;
   readonly reservationLeaseMs: number;
   readonly unavailableRetryAfterMs: number;
-  readonly retentionAfterExpiryMs: number;
+  readonly reconciliationRetentionMs: number;
   readonly maxReservationRecords: number;
   readonly maxRevisionConflicts: number;
   readonly operationTimeoutMs: number;
@@ -30,7 +32,7 @@ export const DEFAULT_PROGRESSIVE_COOLDOWN_POLICY: ProgressiveCooldownPolicy =
     resetAfterMs: 48 * HOUR_MS,
     reservationLeaseMs: 5 * MINUTE_MS,
     unavailableRetryAfterMs: 30 * SECOND_MS,
-    retentionAfterExpiryMs: 7 * DAY_MS,
+    reconciliationRetentionMs: 6 * DAY_MS,
     maxReservationRecords: 64,
     maxRevisionConflicts: 5,
     operationTimeoutMs: 2 * SECOND_MS,
@@ -82,7 +84,8 @@ export interface ProgressiveCooldownReservationRecord {
   readonly status: ProgressiveCooldownReservationStatus;
   readonly reservedAtMs: number;
   readonly leaseExpiresAtMs: number;
-  readonly retainUntilMs: number;
+  /** Last instant at which late immutable-acceptance reconciliation is valid. */
+  readonly reconciliationUntilMs: number;
   readonly committedAtMs?: number;
   readonly committedStreak?: number;
   readonly cooldownDurationMs?: number;
@@ -101,9 +104,10 @@ export interface ProgressiveCooldownState {
   readonly cooldownUntilMs?: number;
   readonly reservations: readonly ProgressiveCooldownReservationRecord[];
   /**
-   * Store adapters must apply this timestamp as an upper-bound deletion TTL.
+   * Live deletion begins one fixed safety window before this absolute deadline.
+   * Live data and bounded backups must be absent no later than this timestamp.
    */
-  readonly purgeAfterMs: number;
+  readonly hardDeleteByMs: number;
 }
 
 export interface ProgressiveCooldownSnapshot {
@@ -120,7 +124,7 @@ export interface ProgressiveCooldownOperationContext {
 export interface ProgressiveCooldownStore {
   read(
     stateKey: string,
-    context: ProgressiveCooldownOperationContext
+    context: ProgressiveCooldownOperationContext,
   ): Promise<ProgressiveCooldownSnapshot | null>;
   compareAndSwap(
     input: {
@@ -128,7 +132,7 @@ export interface ProgressiveCooldownStore {
       readonly expectedRevision: string | null;
       readonly state: ProgressiveCooldownState;
     },
-    context: ProgressiveCooldownOperationContext
+    context: ProgressiveCooldownOperationContext,
   ): Promise<
     | {
         readonly applied: true;
@@ -170,13 +174,11 @@ export interface ProgressiveCooldownScopeCommand {
   readonly signal?: AbortSignal;
 }
 
-export interface ProgressiveCooldownReservationCommand
-  extends ProgressiveCooldownScopeCommand {
+export interface ProgressiveCooldownReservationCommand extends ProgressiveCooldownScopeCommand {
   readonly idempotencyKey: string;
 }
 
-export interface ProgressiveCooldownTransitionCommand
-  extends ProgressiveCooldownReservationCommand {
+export interface ProgressiveCooldownTransitionCommand extends ProgressiveCooldownReservationCommand {
   readonly reservationId: string;
 }
 
@@ -196,10 +198,7 @@ export interface ProgressiveCooldownAvailableResult {
 }
 
 export interface ProgressiveCooldownBlockedResult {
-  readonly status:
-    | "control-capacity"
-    | "cooldown"
-    | "reservation-active";
+  readonly status: "control-capacity" | "cooldown" | "reservation-active";
   readonly availableAtMs: number;
   readonly retryAfterSeconds: number;
   readonly streak: number;
@@ -276,18 +275,16 @@ export type ProgressiveCooldownReleaseResult =
   | ProgressiveCooldownUnavailableResult;
 
 type MutableReservationRecord = {
-  -readonly [Key in keyof ProgressiveCooldownReservationRecord]:
-    ProgressiveCooldownReservationRecord[Key];
+  -readonly [Key in keyof ProgressiveCooldownReservationRecord]: ProgressiveCooldownReservationRecord[Key];
 };
 
-type ParsedCommittedReservationRecord =
-  ProgressiveCooldownReservationRecord & {
-    readonly status: "committed";
-    readonly committedAtMs: number;
-    readonly committedStreak: number;
-    readonly cooldownDurationMs: number;
-    readonly cooldownUntilMs: number;
-  };
+type ParsedCommittedReservationRecord = ProgressiveCooldownReservationRecord & {
+  readonly status: "committed";
+  readonly committedAtMs: number;
+  readonly committedStreak: number;
+  readonly cooldownDurationMs: number;
+  readonly cooldownUntilMs: number;
+};
 
 type MutableState = {
   schemaVersion: "1";
@@ -295,7 +292,7 @@ type MutableState = {
   lastCommittedAtMs?: number;
   cooldownUntilMs?: number;
   reservations: MutableReservationRecord[];
-  purgeAfterMs: number;
+  hardDeleteByMs: number;
 };
 
 type Mutation<Result> = {
@@ -307,10 +304,8 @@ const OPAQUE_SUBJECT_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const PURPOSE_PATTERN = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+){1,7}$/u;
 const VERSION_PATTERN = /^v[1-9][0-9]{0,5}$/u;
 const IDEMPOTENCY_PATTERN = /^[A-Za-z0-9_-]{22,128}$/u;
-const STATE_KEY_PATTERN =
-  /^fbs1\.([A-Za-z0-9_-]{42}[AEIMQUYcgkosw048])$/u;
-const RESERVATION_ID_PATTERN =
-  /^fbr1\.([A-Za-z0-9_-]{21}[AQgw])$/u;
+const STATE_KEY_PATTERN = /^fbs1\.([A-Za-z0-9_-]{42}[AEIMQUYcgkosw048])$/u;
+const RESERVATION_ID_PATTERN = /^fbr1\.([A-Za-z0-9_-]{21}[AQgw])$/u;
 const REVISION_PATTERN = /^[\x20-\x7e]{1,256}$/u;
 
 const SCOPE_KEYS = new Set(["purpose", "version", "opaqueSubjectKey"]);
@@ -319,7 +314,7 @@ const REQUIRED_STATE_KEYS = new Set([
   "schemaVersion",
   "streak",
   "reservations",
-  "purgeAfterMs",
+  "hardDeleteByMs",
 ]);
 const REQUIRED_RESERVATION_KEYS = new Set([
   "reservationId",
@@ -327,7 +322,7 @@ const REQUIRED_RESERVATION_KEYS = new Set([
   "status",
   "reservedAtMs",
   "leaseExpiresAtMs",
-  "retainUntilMs",
+  "reconciliationUntilMs",
 ]);
 const STATE_KEYS = new Set([
   "schemaVersion",
@@ -335,7 +330,7 @@ const STATE_KEYS = new Set([
   "lastCommittedAtMs",
   "cooldownUntilMs",
   "reservations",
-  "purgeAfterMs",
+  "hardDeleteByMs",
 ]);
 const RESERVATION_KEYS = new Set([
   "reservationId",
@@ -343,7 +338,7 @@ const RESERVATION_KEYS = new Set([
   "status",
   "reservedAtMs",
   "leaseExpiresAtMs",
-  "retainUntilMs",
+  "reconciliationUntilMs",
   "committedAtMs",
   "committedStreak",
   "cooldownDurationMs",
@@ -355,7 +350,7 @@ const POLICY_KEYS = new Set([
   "resetAfterMs",
   "reservationLeaseMs",
   "unavailableRetryAfterMs",
-  "retentionAfterExpiryMs",
+  "reconciliationRetentionMs",
   "maxReservationRecords",
   "maxRevisionConflicts",
   "operationTimeoutMs",
@@ -377,7 +372,7 @@ class OperationDeadline {
     nowMs: number,
     deadlineAtMs: number,
     timeoutMs: number,
-    externalSignal: AbortSignal | undefined
+    externalSignal: AbortSignal | undefined,
   ) {
     this.startedAtMs = nowMs;
     this.signal = this.#controller.signal;
@@ -393,11 +388,9 @@ class OperationDeadline {
     if (externalSignal?.aborted) {
       this.#controller.abort();
     } else {
-      externalSignal?.addEventListener(
-        "abort",
-        this.#externalAbortListener,
-        { once: true }
-      );
+      externalSignal?.addEventListener("abort", this.#externalAbortListener, {
+        once: true,
+      });
     }
 
     this.#timeout = setTimeout(() => {
@@ -439,7 +432,7 @@ class OperationDeadline {
           finish(() => {
             reject(new Error("Progressive cooldown operation unavailable."));
           });
-        }
+        },
       );
     });
   }
@@ -448,7 +441,7 @@ class OperationDeadline {
     clearTimeout(this.#timeout);
     this.#externalSignal?.removeEventListener(
       "abort",
-      this.#externalAbortListener
+      this.#externalAbortListener,
     );
   }
 }
@@ -456,7 +449,7 @@ class OperationDeadline {
 function createOperationDeadline(
   nowMs: number,
   timeoutMs: number,
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
 ): OperationDeadline | null {
   const deadlineAtMs = addTimestamp(nowMs, timeoutMs);
   return deadlineAtMs === null
@@ -495,7 +488,7 @@ export class OpaqueProgressiveCooldownController {
   }
 
   async getEligibility(
-    command: ProgressiveCooldownScopeCommand
+    command: ProgressiveCooldownScopeCommand,
   ): Promise<ProgressiveCooldownEligibilityResult> {
     const stateKey = deriveStateKey(validateScope(command?.scope));
     const nowMs = this.#getNow();
@@ -506,7 +499,7 @@ export class OpaqueProgressiveCooldownController {
     const operation = createOperationDeadline(
       nowMs,
       this.#policy.operationTimeoutMs,
-      command.signal
+      command.signal,
     );
     if (!operation) {
       return this.#unavailable(null);
@@ -534,15 +527,12 @@ export class OpaqueProgressiveCooldownController {
   }
 
   async reserve(
-    command: ProgressiveCooldownReservationCommand
+    command: ProgressiveCooldownReservationCommand,
   ): Promise<ProgressiveCooldownReserveResult> {
     const validatedScope = validateScope(command?.scope);
     const idempotencyKey = validateIdempotencyKey(command?.idempotencyKey);
     const stateKey = deriveStateKey(validatedScope);
-    const idempotencyDigest = deriveIdempotencyDigest(
-      stateKey,
-      idempotencyKey
-    );
+    const idempotencyDigest = deriveIdempotencyDigest(stateKey, idempotencyKey);
     const nowMs = this.#getNow();
     if (nowMs === null) {
       return this.#unavailable(null);
@@ -571,7 +561,7 @@ export class OpaqueProgressiveCooldownController {
     const operation = createOperationDeadline(
       nowMs,
       this.#policy.operationTimeoutMs,
-      command.signal
+      command.signal,
     );
     if (!operation) {
       return this.#unavailable(null);
@@ -582,85 +572,81 @@ export class OpaqueProgressiveCooldownController {
         nowMs,
         operation,
         (current, mutationNowMs) => {
-        const state = normalizeState(
-          current,
-          mutationNowMs,
-          this.#policy
-        );
-        if (!state) {
-          return { result: this.#unavailable(mutationNowMs) };
-        }
-        const replay = state.reservations.find(
-          (record) => record.idempotencyDigest === idempotencyDigest
-        );
-        if (replay) {
-          return {
-            result: reserveReplayResult(replay, mutationNowMs),
-          };
-        }
+          const state = normalizeState(current, mutationNowMs, this.#policy);
+          if (!state) {
+            return { result: this.#unavailable(mutationNowMs) };
+          }
+          const replay = state.reservations.find(
+            (record) => record.idempotencyDigest === idempotencyDigest,
+          );
+          if (replay) {
+            return {
+              result: reserveReplayResult(replay, mutationNowMs),
+            };
+          }
 
-        const eligibility = eligibilityFor(
-          state,
-          mutationNowMs,
-          this.#policy
-        );
-        if (eligibility.status !== "available") {
-          return { result: eligibility };
-        }
+          const eligibility = eligibilityFor(
+            state,
+            mutationNowMs,
+            this.#policy,
+          );
+          if (eligibility.status !== "available") {
+            return { result: eligibility };
+          }
 
-        const reservationId = getCandidateReservationId();
-        if (
-          !reservationId ||
-          state.reservations.some(
-            (record) => record.reservationId === reservationId
-          )
-        ) {
-          return { result: this.#unavailable(mutationNowMs) };
-        }
+          const reservationId = getCandidateReservationId();
+          if (
+            !reservationId ||
+            state.reservations.some(
+              (record) => record.reservationId === reservationId,
+            )
+          ) {
+            return { result: this.#unavailable(mutationNowMs) };
+          }
 
-        const leaseExpiresAtMs = addTimestamp(
-          mutationNowMs,
-          this.#policy.reservationLeaseMs
-        );
-        const retainUntilMs =
-          leaseExpiresAtMs === null
-            ? null
-            : addTimestamp(
-          leaseExpiresAtMs,
-          this.#policy.retentionAfterExpiryMs
-        );
-        if (leaseExpiresAtMs === null || retainUntilMs === null) {
-          return { result: this.#unavailable(mutationNowMs) };
-        }
-        state.reservations.push({
-          reservationId,
-          idempotencyDigest,
-          status: "reserved",
-          reservedAtMs: mutationNowMs,
-          leaseExpiresAtMs,
-          retainUntilMs,
-        });
-        const purgeAfterMs = calculatePurgeAfter(
-          state,
-          mutationNowMs,
-          this.#policy
-        );
-        if (purgeAfterMs === null) {
-          return { result: this.#unavailable(mutationNowMs) };
-        }
-        state.purgeAfterMs = purgeAfterMs;
-
-        return {
-          state,
-          result: {
-            status: "reserved",
-            replayed: false,
+          const leaseExpiresAtMs = addTimestamp(
+            mutationNowMs,
+            this.#policy.reservationLeaseMs,
+          );
+          const reconciliationUntilMs =
+            leaseExpiresAtMs === null
+              ? null
+              : addTimestamp(
+                  leaseExpiresAtMs,
+                  this.#policy.reconciliationRetentionMs,
+                );
+          if (leaseExpiresAtMs === null || reconciliationUntilMs === null) {
+            return { result: this.#unavailable(mutationNowMs) };
+          }
+          state.reservations.push({
             reservationId,
+            idempotencyDigest,
+            status: "reserved",
             reservedAtMs: mutationNowMs,
             leaseExpiresAtMs,
-          },
-        };
-        }
+            reconciliationUntilMs,
+          });
+          const hardDeleteByMs = calculateHardDeleteBy(
+            state,
+            mutationNowMs,
+            this.#policy,
+          );
+          if (hardDeleteByMs === null) {
+            return { result: this.#unavailable(mutationNowMs) };
+          }
+          state.hardDeleteByMs = hardDeleteByMs;
+
+          return {
+            state,
+            result: {
+              status: "reserved",
+              replayed: false,
+              reservationId,
+              reservedAtMs: mutationNowMs,
+              leaseExpiresAtMs,
+            },
+          };
+        },
       );
     } finally {
       operation.dispose();
@@ -668,16 +654,13 @@ export class OpaqueProgressiveCooldownController {
   }
 
   async commitAccepted(
-    command: ProgressiveCooldownTransitionCommand
+    command: ProgressiveCooldownTransitionCommand,
   ): Promise<ProgressiveCooldownCommitResult> {
     const validatedScope = validateScope(command?.scope);
     const idempotencyKey = validateIdempotencyKey(command?.idempotencyKey);
     const reservationId = validateReservationId(command?.reservationId);
     const stateKey = deriveStateKey(validatedScope);
-    const idempotencyDigest = deriveIdempotencyDigest(
-      stateKey,
-      idempotencyKey
-    );
+    const idempotencyDigest = deriveIdempotencyDigest(stateKey, idempotencyKey);
     const nowMs = this.#getNow();
     if (nowMs === null) {
       return this.#unavailable(null);
@@ -686,7 +669,7 @@ export class OpaqueProgressiveCooldownController {
     const operation = createOperationDeadline(
       nowMs,
       this.#policy.operationTimeoutMs,
-      command.signal
+      command.signal,
     );
     if (!operation) {
       return this.#unavailable(null);
@@ -704,13 +687,13 @@ export class OpaqueProgressiveCooldownController {
         const existingState = normalizeState(
           existingSnapshot.state,
           decisionNowMs,
-          this.#policy
+          this.#policy,
         );
         if (!existingState) {
           return this.#unavailable(decisionNowMs);
         }
         const existingRecord = existingState.reservations.find(
-          (candidate) => candidate.reservationId === reservationId
+          (candidate) => candidate.reservationId === reservationId,
         );
         if (!existingRecord) {
           return { status: "reservation-not-found" };
@@ -737,7 +720,7 @@ export class OpaqueProgressiveCooldownController {
               reservationId,
               signal: operation.signal,
               deadlineAtMs: operation.deadlineAtMs,
-            })
+            }),
           )) === true;
       } catch {
         return this.#unavailable(nowMs);
@@ -751,86 +734,82 @@ export class OpaqueProgressiveCooldownController {
         nowMs,
         operation,
         (current, mutationNowMs) => {
-        const state = normalizeState(
-          current,
-          mutationNowMs,
-          this.#policy
-        );
-        if (!state) {
-          return { result: this.#unavailable(mutationNowMs) };
-        }
-        const record = state.reservations.find(
-          (candidate) => candidate.reservationId === reservationId
-        );
-        if (!record) {
-          return { result: { status: "reservation-not-found" } };
-        }
-        if (record.idempotencyDigest !== idempotencyDigest) {
-          return { result: { status: "reservation-mismatch" } };
-        }
-        if (record.status === "committed") {
-          return { result: committedResult(record, true) };
-        }
+          const state = normalizeState(current, mutationNowMs, this.#policy);
+          if (!state) {
+            return { result: this.#unavailable(mutationNowMs) };
+          }
+          const record = state.reservations.find(
+            (candidate) => candidate.reservationId === reservationId,
+          );
+          if (!record) {
+            return { result: { status: "reservation-not-found" } };
+          }
+          if (record.idempotencyDigest !== idempotencyDigest) {
+            return { result: { status: "reservation-mismatch" } };
+          }
+          if (record.status === "committed") {
+            return { result: committedResult(record, true) };
+          }
 
-        const nextStreak = Math.min(
-          state.streak + 1,
-          this.#policy.cooldownLadderMs.length
-        );
-        const cooldownDurationMs =
-          this.#policy.cooldownLadderMs[nextStreak - 1];
-        if (cooldownDurationMs === undefined) {
-          return { result: this.#unavailable(mutationNowMs) };
-        }
-        const cooldownUntilMs = addTimestamp(
-          mutationNowMs,
-          cooldownDurationMs
-        );
-        const quietResetAtMs = addTimestamp(
-          mutationNowMs,
-          this.#policy.resetAfterMs
-        );
-        const retainUntilMs =
-          quietResetAtMs === null
-            ? null
-            : addTimestamp(
-                quietResetAtMs,
-                this.#policy.retentionAfterExpiryMs
-              );
-        if (
-          cooldownUntilMs === null ||
-          quietResetAtMs === null ||
-          retainUntilMs === null ||
-          (state.lastCommittedAtMs !== undefined &&
-            mutationNowMs < state.lastCommittedAtMs)
-        ) {
-          return { result: this.#unavailable(mutationNowMs) };
-        }
+          const nextStreak = Math.min(
+            state.streak + 1,
+            this.#policy.cooldownLadderMs.length,
+          );
+          const cooldownDurationMs =
+            this.#policy.cooldownLadderMs[nextStreak - 1];
+          if (cooldownDurationMs === undefined) {
+            return { result: this.#unavailable(mutationNowMs) };
+          }
+          const cooldownUntilMs = addTimestamp(
+            mutationNowMs,
+            cooldownDurationMs,
+          );
+          const quietResetAtMs = addTimestamp(
+            mutationNowMs,
+            this.#policy.resetAfterMs,
+          );
+          const reconciliationUntilMs =
+            quietResetAtMs === null
+              ? null
+              : addTimestamp(
+                  quietResetAtMs,
+                  this.#policy.reconciliationRetentionMs,
+                );
+          if (
+            cooldownUntilMs === null ||
+            quietResetAtMs === null ||
+            reconciliationUntilMs === null ||
+            (state.lastCommittedAtMs !== undefined &&
+              mutationNowMs < state.lastCommittedAtMs)
+          ) {
+            return { result: this.#unavailable(mutationNowMs) };
+          }
 
-        record.status = "committed";
-        record.committedAtMs = mutationNowMs;
-        record.committedStreak = nextStreak;
-        record.cooldownDurationMs = cooldownDurationMs;
-        record.cooldownUntilMs = cooldownUntilMs;
-        record.retainUntilMs = retainUntilMs;
-        delete record.releasedAtMs;
-        state.streak = nextStreak;
-        state.lastCommittedAtMs = mutationNowMs;
-        state.cooldownUntilMs = cooldownUntilMs;
-        const purgeAfterMs = calculatePurgeAfter(
-          state,
-          mutationNowMs,
-          this.#policy
-        );
-        if (purgeAfterMs === null) {
-          return { result: this.#unavailable(mutationNowMs) };
-        }
-        state.purgeAfterMs = purgeAfterMs;
+          record.status = "committed";
+          record.committedAtMs = mutationNowMs;
+          record.committedStreak = nextStreak;
+          record.cooldownDurationMs = cooldownDurationMs;
+          record.cooldownUntilMs = cooldownUntilMs;
+          record.reconciliationUntilMs = reconciliationUntilMs;
+          delete record.releasedAtMs;
+          state.streak = nextStreak;
+          state.lastCommittedAtMs = mutationNowMs;
+          state.cooldownUntilMs = cooldownUntilMs;
+          const hardDeleteByMs = calculateHardDeleteBy(
+            state,
+            mutationNowMs,
+            this.#policy,
+          );
+          if (hardDeleteByMs === null) {
+            return { result: this.#unavailable(mutationNowMs) };
+          }
+          state.hardDeleteByMs = hardDeleteByMs;
 
-        return {
-          state,
-          result: committedResult(record, false),
-        };
-        }
+          return {
+            state,
+            result: committedResult(record, false),
+          };
+        },
       );
     } finally {
       operation.dispose();
@@ -838,16 +817,13 @@ export class OpaqueProgressiveCooldownController {
   }
 
   async release(
-    command: ProgressiveCooldownTransitionCommand
+    command: ProgressiveCooldownTransitionCommand,
   ): Promise<ProgressiveCooldownReleaseResult> {
     const validatedScope = validateScope(command?.scope);
     const idempotencyKey = validateIdempotencyKey(command?.idempotencyKey);
     const reservationId = validateReservationId(command?.reservationId);
     const stateKey = deriveStateKey(validatedScope);
-    const idempotencyDigest = deriveIdempotencyDigest(
-      stateKey,
-      idempotencyKey
-    );
+    const idempotencyDigest = deriveIdempotencyDigest(stateKey, idempotencyKey);
     const nowMs = this.#getNow();
     if (nowMs === null) {
       return this.#unavailable(null);
@@ -856,7 +832,7 @@ export class OpaqueProgressiveCooldownController {
     const operation = createOperationDeadline(
       nowMs,
       this.#policy.operationTimeoutMs,
-      command.signal
+      command.signal,
     );
     if (!operation) {
       return this.#unavailable(null);
@@ -867,55 +843,51 @@ export class OpaqueProgressiveCooldownController {
         nowMs,
         operation,
         (current, mutationNowMs) => {
-        const state = normalizeState(
-          current,
-          mutationNowMs,
-          this.#policy
-        );
-        if (!state) {
-          return { result: this.#unavailable(mutationNowMs) };
-        }
-        const record = state.reservations.find(
-          (candidate) => candidate.reservationId === reservationId
-        );
-        if (!record) {
-          return { result: { status: "reservation-not-found" } };
-        }
-        if (record.idempotencyDigest !== idempotencyDigest) {
-          return { result: { status: "reservation-mismatch" } };
-        }
-        if (record.status === "committed") {
-          return { result: committedResult(record, true) };
-        }
-        if (record.status === "released") {
-          return { result: releasedResult(record, true) };
-        }
+          const state = normalizeState(current, mutationNowMs, this.#policy);
+          if (!state) {
+            return { result: this.#unavailable(mutationNowMs) };
+          }
+          const record = state.reservations.find(
+            (candidate) => candidate.reservationId === reservationId,
+          );
+          if (!record) {
+            return { result: { status: "reservation-not-found" } };
+          }
+          if (record.idempotencyDigest !== idempotencyDigest) {
+            return { result: { status: "reservation-mismatch" } };
+          }
+          if (record.status === "committed") {
+            return { result: committedResult(record, true) };
+          }
+          if (record.status === "released") {
+            return { result: releasedResult(record, true) };
+          }
 
-        record.status = "released";
-        record.releasedAtMs = mutationNowMs;
-        const retainUntilMs = addTimestamp(
-          mutationNowMs,
-          this.#policy.retentionAfterExpiryMs
-        );
-        if (retainUntilMs === null) {
-          return { result: this.#unavailable(mutationNowMs) };
-        }
-        record.retainUntilMs = retainUntilMs;
-        const purgeAfterMs = calculatePurgeAfter(
-          state,
-          mutationNowMs,
-          this.#policy
-        );
-        if (purgeAfterMs === null) {
-          return { result: this.#unavailable(mutationNowMs) };
-        }
-        state.purgeAfterMs = purgeAfterMs;
+          record.status = "released";
+          record.releasedAtMs = mutationNowMs;
+          const reconciliationUntilMs = addTimestamp(
+            mutationNowMs,
+            this.#policy.reconciliationRetentionMs,
+          );
+          if (reconciliationUntilMs === null) {
+            return { result: this.#unavailable(mutationNowMs) };
+          }
+          record.reconciliationUntilMs = reconciliationUntilMs;
+          const hardDeleteByMs = calculateHardDeleteBy(
+            state,
+            mutationNowMs,
+            this.#policy,
+          );
+          if (hardDeleteByMs === null) {
+            return { result: this.#unavailable(mutationNowMs) };
+          }
+          state.hardDeleteByMs = hardDeleteByMs;
 
-        return {
-          state,
-          result: releasedResult(record, false),
-        };
-        }
+          return {
+            state,
+            result: releasedResult(record, false),
+          };
+        },
       );
     } finally {
       operation.dispose();
@@ -950,14 +922,14 @@ export class OpaqueProgressiveCooldownController {
 
   async #read(
     stateKey: string,
-    operation: OperationDeadline
+    operation: OperationDeadline,
   ): Promise<ProgressiveCooldownSnapshot | null | "unavailable"> {
     try {
       if (operation.signal.aborted) {
         return "unavailable";
       }
       const snapshot = await operation.wait(
-        this.#store.read(stateKey, operation.context)
+        this.#store.read(stateKey, operation.context),
       );
       if (snapshot === null) {
         return null;
@@ -967,8 +939,7 @@ export class OpaqueProgressiveCooldownController {
         return "unavailable";
       }
       return (
-        parseSnapshot(snapshot, this.#policy, validationNowMs) ??
-        "unavailable"
+        parseSnapshot(snapshot, this.#policy, validationNowMs) ?? "unavailable"
       );
     } catch {
       return "unavailable";
@@ -979,7 +950,7 @@ export class OpaqueProgressiveCooldownController {
     stateKey: string,
     nowMs: number,
     operation: OperationDeadline,
-    reducer: (state: MutableState, mutationNowMs: number) => Mutation<Result>
+    reducer: (state: MutableState, mutationNowMs: number) => Mutation<Result>,
   ): Promise<Result | ProgressiveCooldownUnavailableResult> {
     for (
       let attempt = 0;
@@ -1022,17 +993,14 @@ export class OpaqueProgressiveCooldownController {
               expectedRevision: snapshot?.revision ?? null,
               state: nextState,
             },
-            operation.context
-          )
+            operation.context,
+          ),
         );
         if (!isCompareAndSwapResult(applied)) {
           return this.#unavailable(mutationNowMs);
         }
         if (applied.applied) {
-          if (
-            snapshot !== null &&
-            applied.revision === snapshot.revision
-          ) {
+          if (snapshot !== null && applied.revision === snapshot.revision) {
             return this.#unavailable(mutationNowMs);
           }
           return mutation.result;
@@ -1046,7 +1014,9 @@ export class OpaqueProgressiveCooldownController {
   }
 }
 
-function validateScope(scope: ProgressiveCooldownScope): ProgressiveCooldownScope {
+function validateScope(
+  scope: ProgressiveCooldownScope,
+): ProgressiveCooldownScope {
   let purpose: unknown;
   let version: unknown;
   let opaqueSubjectKey: unknown;
@@ -1095,10 +1065,7 @@ function validateIdempotencyKey(value: string): string {
 }
 
 function validateReservationId(value: string): string {
-  if (
-    typeof value !== "string" ||
-    !isCanonicalReservationId(value)
-  ) {
+  if (typeof value !== "string" || !isCanonicalReservationId(value)) {
     throw new ProgressiveCooldownInputError("invalid-reservation-id");
   }
   return value;
@@ -1124,8 +1091,7 @@ function isCanonicalReservationId(value: string): boolean {
   try {
     const decoded = Buffer.from(match[1], "base64url");
     return (
-      decoded.byteLength === 16 &&
-      decoded.toString("base64url") === match[1]
+      decoded.byteLength === 16 && decoded.toString("base64url") === match[1]
     );
   } catch {
     return false;
@@ -1140,8 +1106,7 @@ function isCanonicalStateKey(value: string): boolean {
   try {
     const decoded = Buffer.from(match[1], "base64url");
     return (
-      decoded.byteLength === 32 &&
-      decoded.toString("base64url") === match[1]
+      decoded.byteLength === 32 && decoded.toString("base64url") === match[1]
     );
   } catch {
     return false;
@@ -1167,7 +1132,7 @@ function deriveStateKey(scope: ProgressiveCooldownScope): string {
 
 function deriveIdempotencyDigest(
   stateKey: string,
-  idempotencyKey: string
+  idempotencyKey: string,
 ): string {
   return createHash("sha256")
     .update("opaque-progressive-cooldown-idempotency:v1", "utf8")
@@ -1179,7 +1144,7 @@ function deriveIdempotencyDigest(
 }
 
 function resolvePolicy(
-  override: Partial<ProgressiveCooldownPolicy> | undefined
+  override: Partial<ProgressiveCooldownPolicy> | undefined,
 ): ProgressiveCooldownPolicy {
   if (
     override !== undefined &&
@@ -1202,20 +1167,16 @@ function resolvePolicy(
     ladder.some(
       (duration, index) =>
         !isDuration(duration, SECOND_MS, MAX_PROGRESSIVE_COOLDOWN_MS) ||
-        (index > 0 && duration < (ladder[index - 1] ?? 0))
+        (index > 0 && duration < (ladder[index - 1] ?? 0)),
     ) ||
     !isDuration(
       candidate.resetAfterMs,
       ladder[ladder.length - 1] ?? SECOND_MS,
-      30 * DAY_MS
+      30 * DAY_MS,
     ) ||
     !isDuration(candidate.reservationLeaseMs, SECOND_MS, 15 * MINUTE_MS) ||
-    !isDuration(
-      candidate.unavailableRetryAfterMs,
-      SECOND_MS,
-      5 * MINUTE_MS
-    ) ||
-    !isDuration(candidate.retentionAfterExpiryMs, MINUTE_MS, 7 * DAY_MS) ||
+    !isDuration(candidate.unavailableRetryAfterMs, SECOND_MS, 5 * MINUTE_MS) ||
+    !isDuration(candidate.reconciliationRetentionMs, MINUTE_MS, 6 * DAY_MS) ||
     !isBoundedInteger(candidate.maxReservationRecords, 1, 256) ||
     !isBoundedInteger(candidate.maxRevisionConflicts, 1, 20) ||
     !isDuration(candidate.operationTimeoutMs, 10, 30 * SECOND_MS)
@@ -1230,25 +1191,19 @@ function resolvePolicy(
 }
 
 function isDuration(value: number, minimum: number, maximum: number): boolean {
-  return (
-    Number.isSafeInteger(value) && value >= minimum && value <= maximum
-  );
+  return Number.isSafeInteger(value) && value >= minimum && value <= maximum;
 }
 
 function isBoundedInteger(
   value: number,
   minimum: number,
-  maximum: number
+  maximum: number,
 ): boolean {
   return Number.isSafeInteger(value) && value >= minimum && value <= maximum;
 }
 
 function isTimestamp(value: unknown): value is number {
-  return (
-    typeof value === "number" &&
-    Number.isSafeInteger(value) &&
-    value >= 0
-  );
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 function addTimestamp(left: number, right: number): number | null {
@@ -1258,13 +1213,17 @@ function addTimestamp(left: number, right: number): number | null {
 
 function canUseClock(
   nowMs: number,
-  policy: ProgressiveCooldownPolicy
+  policy: ProgressiveCooldownPolicy,
 ): boolean {
   const maximumHorizonMs = Math.max(
     policy.operationTimeoutMs,
     policy.unavailableRetryAfterMs,
-    policy.reservationLeaseMs + policy.retentionAfterExpiryMs,
-    policy.resetAfterMs + policy.retentionAfterExpiryMs
+    policy.reservationLeaseMs +
+      policy.reconciliationRetentionMs +
+      PROGRESSIVE_COOLDOWN_PURGE_SAFETY_MS,
+    policy.resetAfterMs +
+      policy.reconciliationRetentionMs +
+      PROGRESSIVE_COOLDOWN_PURGE_SAFETY_MS,
   );
   return addTimestamp(nowMs, maximumHorizonMs) !== null;
 }
@@ -1278,7 +1237,7 @@ function createEmptyState(nowMs: number): MutableState {
     schemaVersion: "1",
     streak: 0,
     reservations: [],
-    purgeAfterMs: nowMs,
+    hardDeleteByMs: nowMs,
   };
 }
 
@@ -1293,13 +1252,13 @@ function mutableState(state: ProgressiveCooldownState): MutableState {
       ? {}
       : { cooldownUntilMs: state.cooldownUntilMs }),
     reservations: state.reservations.map((record) => ({ ...record })),
-    purgeAfterMs: state.purgeAfterMs,
+    hardDeleteByMs: state.hardDeleteByMs,
   };
 }
 
 function immutableState(state: MutableState): ProgressiveCooldownState {
   const reservations = Object.freeze(
-    state.reservations.map((record) => Object.freeze({ ...record }))
+    state.reservations.map((record) => Object.freeze({ ...record })),
   );
   return Object.freeze({
     schemaVersion: "1",
@@ -1311,14 +1270,14 @@ function immutableState(state: MutableState): ProgressiveCooldownState {
       ? {}
       : { cooldownUntilMs: state.cooldownUntilMs }),
     reservations,
-    purgeAfterMs: state.purgeAfterMs,
+    hardDeleteByMs: state.hardDeleteByMs,
   });
 }
 
 function normalizeState(
   source: ProgressiveCooldownState | MutableState,
   nowMs: number,
-  policy: ProgressiveCooldownPolicy
+  policy: ProgressiveCooldownPolicy,
 ): MutableState | null {
   const state = mutableState(source);
   if (
@@ -1327,16 +1286,14 @@ function normalizeState(
     state.reservations.some(
       (record) =>
         record.reservedAtMs > nowMs ||
-        (record.committedAtMs !== undefined &&
-          record.committedAtMs > nowMs) ||
-        (record.releasedAtMs !== undefined &&
-          record.releasedAtMs > nowMs)
+        (record.committedAtMs !== undefined && record.committedAtMs > nowMs) ||
+        (record.releasedAtMs !== undefined && record.releasedAtMs > nowMs),
     )
   ) {
     return null;
   }
   state.reservations = state.reservations.filter(
-    (record) => record.retainUntilMs > nowMs
+    (record) => record.reconciliationUntilMs > nowMs,
   );
 
   if (
@@ -1348,100 +1305,112 @@ function normalizeState(
     delete state.cooldownUntilMs;
   }
 
-  const purgeAfterMs = calculatePurgeAfter(state, nowMs, policy);
-  if (purgeAfterMs === null) {
+  const hardDeleteByMs = calculateHardDeleteBy(state, nowMs, policy);
+  if (hardDeleteByMs === null) {
     return null;
   }
-  state.purgeAfterMs = purgeAfterMs;
+  state.hardDeleteByMs = hardDeleteByMs;
   return state;
 }
 
-function calculatePurgeAfter(
+function calculateHardDeleteBy(
   state: MutableState,
   nowMs: number,
-  policy: ProgressiveCooldownPolicy
+  policy: ProgressiveCooldownPolicy,
 ): number | null {
-  let purgeAfterMs = nowMs;
+  let reconciliationHorizonMs = nowMs;
   for (const record of state.reservations) {
-    purgeAfterMs = Math.max(purgeAfterMs, record.retainUntilMs);
+    reconciliationHorizonMs = Math.max(
+      reconciliationHorizonMs,
+      record.reconciliationUntilMs,
+    );
   }
   if (state.lastCommittedAtMs !== undefined) {
     const quietResetAtMs = addTimestamp(
       state.lastCommittedAtMs,
-      policy.resetAfterMs
+      policy.resetAfterMs,
     );
-    const retainedUntilMs =
+    const reconciliationUntilMs =
       quietResetAtMs === null
         ? null
-        : addTimestamp(quietResetAtMs, policy.retentionAfterExpiryMs);
-    if (retainedUntilMs === null) {
+        : addTimestamp(quietResetAtMs, policy.reconciliationRetentionMs);
+    if (reconciliationUntilMs === null) {
       return null;
     }
-    purgeAfterMs = Math.max(
-      purgeAfterMs,
-      retainedUntilMs
+    reconciliationHorizonMs = Math.max(
+      reconciliationHorizonMs,
+      reconciliationUntilMs,
     );
   }
   if (state.cooldownUntilMs !== undefined) {
-    const retainedUntilMs = addTimestamp(
+    const reconciliationUntilMs = addTimestamp(
       state.cooldownUntilMs,
-      policy.retentionAfterExpiryMs
+      policy.reconciliationRetentionMs,
     );
-    if (retainedUntilMs === null) {
+    if (reconciliationUntilMs === null) {
       return null;
     }
-    purgeAfterMs = Math.max(
-      purgeAfterMs,
-      retainedUntilMs
+    reconciliationHorizonMs = Math.max(
+      reconciliationHorizonMs,
+      reconciliationUntilMs,
     );
   }
-  return purgeAfterMs;
+  return addTimestamp(
+    reconciliationHorizonMs,
+    PROGRESSIVE_COOLDOWN_PURGE_SAFETY_MS,
+  );
 }
 
-function calculatePersistedPurgeAfter(
+function calculatePersistedHardDeleteBy(
   state: MutableState,
-  policy: ProgressiveCooldownPolicy
+  policy: ProgressiveCooldownPolicy,
 ): number | null {
-  let purgeAfterMs = state.reservations.reduce(
-    (maximum, record) => Math.max(maximum, record.retainUntilMs),
-    0
+  let reconciliationHorizonMs = state.reservations.reduce(
+    (maximum, record) => Math.max(maximum, record.reconciliationUntilMs),
+    0,
   );
   if (state.lastCommittedAtMs !== undefined) {
     const quietResetAtMs = addTimestamp(
       state.lastCommittedAtMs,
-      policy.resetAfterMs
+      policy.resetAfterMs,
     );
-    const retainedUntilMs =
+    const reconciliationUntilMs =
       quietResetAtMs === null
         ? null
-        : addTimestamp(quietResetAtMs, policy.retentionAfterExpiryMs);
-    if (retainedUntilMs === null) {
+        : addTimestamp(quietResetAtMs, policy.reconciliationRetentionMs);
+    if (reconciliationUntilMs === null) {
       return null;
     }
-    purgeAfterMs = Math.max(purgeAfterMs, retainedUntilMs);
+    reconciliationHorizonMs = Math.max(
+      reconciliationHorizonMs,
+      reconciliationUntilMs,
+    );
   }
   if (state.cooldownUntilMs !== undefined) {
-    const retainedUntilMs = addTimestamp(
+    const reconciliationUntilMs = addTimestamp(
       state.cooldownUntilMs,
-      policy.retentionAfterExpiryMs
+      policy.reconciliationRetentionMs,
     );
-    if (retainedUntilMs === null) {
+    if (reconciliationUntilMs === null) {
       return null;
     }
-    purgeAfterMs = Math.max(purgeAfterMs, retainedUntilMs);
+    reconciliationHorizonMs = Math.max(
+      reconciliationHorizonMs,
+      reconciliationUntilMs,
+    );
   }
-  return purgeAfterMs;
+  return addTimestamp(
+    reconciliationHorizonMs,
+    PROGRESSIVE_COOLDOWN_PURGE_SAFETY_MS,
+  );
 }
 
 function eligibilityFor(
   state: MutableState,
   nowMs: number,
-  policy: ProgressiveCooldownPolicy
+  policy: ProgressiveCooldownPolicy,
 ): ProgressiveCooldownAvailableResult | ProgressiveCooldownBlockedResult {
-  if (
-    state.cooldownUntilMs !== undefined &&
-    state.cooldownUntilMs > nowMs
-  ) {
+  if (state.cooldownUntilMs !== undefined && state.cooldownUntilMs > nowMs) {
     return {
       status: "cooldown",
       availableAtMs: state.cooldownUntilMs,
@@ -1453,7 +1422,7 @@ function eligibilityFor(
   const activeLeaseEnds = state.reservations
     .filter(
       (record) =>
-        record.status === "reserved" && record.leaseExpiresAtMs > nowMs
+        record.status === "reserved" && record.leaseExpiresAtMs > nowMs,
     )
     .map((record) => record.leaseExpiresAtMs);
   if (activeLeaseEnds.length > 0) {
@@ -1468,7 +1437,7 @@ function eligibilityFor(
 
   if (state.reservations.length >= policy.maxReservationRecords) {
     const availableAtMs = Math.min(
-      ...state.reservations.map((record) => record.retainUntilMs)
+      ...state.reservations.map((record) => record.reconciliationUntilMs),
     );
     return {
       status: "control-capacity",
@@ -1483,7 +1452,7 @@ function eligibilityFor(
 
 function reserveReplayResult(
   record: MutableReservationRecord,
-  nowMs: number
+  nowMs: number,
 ):
   | ProgressiveCooldownReservedResult
   | ProgressiveCooldownPendingResult
@@ -1513,7 +1482,7 @@ function reserveReplayResult(
 
 function committedResult(
   record: MutableReservationRecord,
-  replayed: boolean
+  replayed: boolean,
 ): ProgressiveCooldownCommittedResult {
   if (
     record.status !== "committed" ||
@@ -1537,7 +1506,7 @@ function committedResult(
 
 function releasedResult(
   record: MutableReservationRecord,
-  replayed: boolean
+  replayed: boolean,
 ): ProgressiveCooldownReleasedResult {
   if (record.status !== "released" || record.releasedAtMs === undefined) {
     throw new Error("Invalid internal progressive cooldown state.");
@@ -1553,7 +1522,7 @@ function releasedResult(
 function parseSnapshot(
   input: unknown,
   policy: ProgressiveCooldownPolicy,
-  nowMs: number
+  nowMs: number,
 ): ProgressiveCooldownSnapshot | null {
   if (
     !isPlainObject(input) ||
@@ -1573,7 +1542,7 @@ function parseSnapshot(
 function parseState(
   input: unknown,
   policy: ProgressiveCooldownPolicy,
-  nowMs: number
+  nowMs: number,
 ): ProgressiveCooldownState | null {
   if (
     !isPlainObject(input) ||
@@ -1584,8 +1553,12 @@ function parseState(
   }
   if (
     input.schemaVersion !== "1" ||
-    !isBoundedInteger(input.streak as number, 0, policy.cooldownLadderMs.length) ||
-    !isTimestamp(input.purgeAfterMs) ||
+    !isBoundedInteger(
+      input.streak as number,
+      0,
+      policy.cooldownLadderMs.length,
+    ) ||
+    !isTimestamp(input.hardDeleteByMs) ||
     !Array.isArray(input.reservations) ||
     input.reservations.length > policy.maxReservationRecords
   ) {
@@ -1637,29 +1610,26 @@ function parseState(
     return null;
   }
 
-  const expectedPurgeAfterMs = calculatePersistedPurgeAfter(
+  const expectedHardDeleteByMs = calculatePersistedHardDeleteBy(
     {
       schemaVersion: "1",
       streak,
       ...(lastCommittedAtMs === undefined ? {} : { lastCommittedAtMs }),
       ...(cooldownUntilMs === undefined ? {} : { cooldownUntilMs }),
       reservations: reservations.map((record) => ({ ...record })),
-      purgeAfterMs: input.purgeAfterMs,
+      hardDeleteByMs: input.hardDeleteByMs,
     },
-    policy
+    policy,
   );
   if (
-    expectedPurgeAfterMs === null ||
+    expectedHardDeleteByMs === null ||
     (reservations.length === 0
-      ? input.purgeAfterMs > nowMs
-      : input.purgeAfterMs !== expectedPurgeAfterMs)
+      ? input.hardDeleteByMs > nowMs
+      : input.hardDeleteByMs !== expectedHardDeleteByMs)
   ) {
     return null;
   }
-  const latestCommittedRecord = validateCommittedHistory(
-    reservations,
-    policy
-  );
+  const latestCommittedRecord = validateCommittedHistory(reservations, policy);
   if (latestCommittedRecord === "invalid") {
     return null;
   }
@@ -1683,13 +1653,13 @@ function parseState(
     ...(lastCommittedAtMs === undefined ? {} : { lastCommittedAtMs }),
     ...(cooldownUntilMs === undefined ? {} : { cooldownUntilMs }),
     reservations,
-    purgeAfterMs: input.purgeAfterMs,
+    hardDeleteByMs: input.hardDeleteByMs,
   };
 }
 
 function validateCommittedHistory(
   reservations: readonly ProgressiveCooldownReservationRecord[],
-  policy: ProgressiveCooldownPolicy
+  policy: ProgressiveCooldownPolicy,
 ): ParsedCommittedReservationRecord | null | "invalid" {
   const committed = reservations
     .filter(
@@ -1698,13 +1668,13 @@ function validateCommittedHistory(
         record.committedAtMs !== undefined &&
         record.committedStreak !== undefined &&
         record.cooldownDurationMs !== undefined &&
-        record.cooldownUntilMs !== undefined
+        record.cooldownUntilMs !== undefined,
     )
     .sort(
       (left, right) =>
         left.committedAtMs - right.committedAtMs ||
         left.committedStreak - right.committedStreak ||
-        left.reservationId.localeCompare(right.reservationId)
+        left.reservationId.localeCompare(right.reservationId),
     );
   if (committed.length === 0) {
     return null;
@@ -1716,12 +1686,11 @@ function validateCommittedHistory(
   }
   for (const record of committed.slice(1)) {
     const expectedStreak =
-      record.committedAtMs - previous.committedAtMs >=
-      policy.resetAfterMs
+      record.committedAtMs - previous.committedAtMs >= policy.resetAfterMs
         ? 1
         : Math.min(
             previous.committedStreak + 1,
-            policy.cooldownLadderMs.length
+            policy.cooldownLadderMs.length,
           );
     if (record.committedStreak !== expectedStreak) {
       return "invalid";
@@ -1734,7 +1703,7 @@ function validateCommittedHistory(
 function parseReservation(
   input: unknown,
   policy: ProgressiveCooldownPolicy,
-  nowMs: number
+  nowMs: number,
 ): ProgressiveCooldownReservationRecord | null {
   if (
     !isPlainObject(input) ||
@@ -1756,8 +1725,8 @@ function parseReservation(
     !isTimestamp(input.leaseExpiresAtMs) ||
     expectedLeaseExpiresAtMs === null ||
     input.leaseExpiresAtMs !== expectedLeaseExpiresAtMs ||
-    !isTimestamp(input.retainUntilMs) ||
-    input.retainUntilMs < input.reservedAtMs
+    !isTimestamp(input.reconciliationUntilMs) ||
+    input.reconciliationUntilMs < input.reservedAtMs
   ) {
     return null;
   }
@@ -1767,17 +1736,17 @@ function parseReservation(
     idempotencyDigest: input.idempotencyDigest,
     reservedAtMs: input.reservedAtMs,
     leaseExpiresAtMs: input.leaseExpiresAtMs,
-    retainUntilMs: input.retainUntilMs,
+    reconciliationUntilMs: input.reconciliationUntilMs,
   };
 
   if (input.status === "reserved") {
     const expectedRetainUntilMs = addTimestamp(
       input.leaseExpiresAtMs,
-      policy.retentionAfterExpiryMs
+      policy.reconciliationRetentionMs,
     );
     if (
       expectedRetainUntilMs === null ||
-      input.retainUntilMs !== expectedRetainUntilMs ||
+      input.reconciliationUntilMs !== expectedRetainUntilMs ||
       input.committedAtMs !== undefined ||
       input.committedStreak !== undefined ||
       input.cooldownDurationMs !== undefined ||
@@ -1791,14 +1760,14 @@ function parseReservation(
 
   if (input.status === "released") {
     const expectedRetainUntilMs = isTimestamp(input.releasedAtMs)
-      ? addTimestamp(input.releasedAtMs, policy.retentionAfterExpiryMs)
+      ? addTimestamp(input.releasedAtMs, policy.reconciliationRetentionMs)
       : null;
     if (
       !isTimestamp(input.releasedAtMs) ||
       input.releasedAtMs < input.reservedAtMs ||
       input.releasedAtMs > nowMs ||
       expectedRetainUntilMs === null ||
-      input.retainUntilMs !== expectedRetainUntilMs ||
+      input.reconciliationUntilMs !== expectedRetainUntilMs ||
       input.committedAtMs !== undefined ||
       input.committedStreak !== undefined ||
       input.cooldownDurationMs !== undefined ||
@@ -1820,7 +1789,7 @@ function parseReservation(
     const expectedRetainUntilMs =
       quietResetAtMs === null
         ? null
-        : addTimestamp(quietResetAtMs, policy.retentionAfterExpiryMs);
+        : addTimestamp(quietResetAtMs, policy.reconciliationRetentionMs);
     if (
       !isTimestamp(input.committedAtMs) ||
       input.committedAtMs < input.reservedAtMs ||
@@ -1828,7 +1797,7 @@ function parseReservation(
       !isBoundedInteger(
         input.committedStreak as number,
         1,
-        policy.cooldownLadderMs.length
+        policy.cooldownLadderMs.length,
       ) ||
       !isTimestamp(input.cooldownDurationMs) ||
       input.cooldownDurationMs !==
@@ -1837,7 +1806,7 @@ function parseReservation(
       input.cooldownUntilMs !==
         addTimestamp(input.committedAtMs, input.cooldownDurationMs) ||
       expectedRetainUntilMs === null ||
-      input.retainUntilMs !== expectedRetainUntilMs ||
+      input.reconciliationUntilMs !== expectedRetainUntilMs ||
       input.releasedAtMs !== undefined
     ) {
       return null;
@@ -1855,9 +1824,7 @@ function parseReservation(
   return null;
 }
 
-function isPlainObject(
-  input: unknown
-): input is Record<string, unknown> {
+function isPlainObject(input: unknown): input is Record<string, unknown> {
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
     return false;
   }
@@ -1867,22 +1834,22 @@ function isPlainObject(
 
 function hasOnlyKeys(
   input: Record<string, unknown>,
-  allowedKeys: ReadonlySet<string>
+  allowedKeys: ReadonlySet<string>,
 ): boolean {
   return Object.keys(input).every((key) => allowedKeys.has(key));
 }
 
 function hasOwnKeys(
   input: Record<string, unknown>,
-  requiredKeys: ReadonlySet<string>
+  requiredKeys: ReadonlySet<string>,
 ): boolean {
   return [...requiredKeys].every((key) =>
-    Object.prototype.hasOwnProperty.call(input, key)
+    Object.prototype.hasOwnProperty.call(input, key),
   );
 }
 
 function isCompareAndSwapResult(
-  input: unknown
+  input: unknown,
 ): input is
   | { readonly applied: true; readonly revision: string }
   | { readonly applied: false } {

@@ -4,6 +4,7 @@ import {
   DEFAULT_PROGRESSIVE_COOLDOWN_POLICY,
   MAX_PROGRESSIVE_COOLDOWN_MS,
   OpaqueProgressiveCooldownController,
+  PROGRESSIVE_COOLDOWN_PURGE_SAFETY_MS,
   ProgressiveCooldownInputError,
   type ImmutableAcceptanceVerifier,
   type ProgressiveCooldownReservationRecord,
@@ -51,7 +52,7 @@ function cloneState(state: ProgressiveCooldownState): ProgressiveCooldownState {
 
 function reservedControlState(
   recordOverrides: Partial<ProgressiveCooldownReservationRecord> = {},
-  stateOverrides: Partial<ProgressiveCooldownState> = {}
+  stateOverrides: Partial<ProgressiveCooldownState> = {},
 ): ProgressiveCooldownState {
   const record: ProgressiveCooldownReservationRecord = {
     reservationId: RESERVATION_IDS[0],
@@ -59,14 +60,15 @@ function reservedControlState(
     status: "reserved",
     reservedAtMs: START,
     leaseExpiresAtMs: START + 5 * MINUTE,
-    retainUntilMs: START + 5 * MINUTE + 7 * DAY,
+    reconciliationUntilMs: START + 5 * MINUTE + 6 * DAY,
     ...recordOverrides,
   };
   return {
     schemaVersion: "1",
     streak: 0,
     reservations: [record],
-    purgeAfterMs: record.retainUntilMs,
+    hardDeleteByMs:
+      record.reconciliationUntilMs + PROGRESSIVE_COOLDOWN_PURGE_SAFETY_MS,
     ...stateOverrides,
   };
 }
@@ -155,7 +157,7 @@ function harness(options?: {
 
 async function eligibilityForPersistedState(
   state: ProgressiveCooldownState,
-  nowMs = START
+  nowMs = START,
 ) {
   const controller = new OpaqueProgressiveCooldownController({
     store: {
@@ -177,7 +179,7 @@ async function eligibilityForPersistedState(
 
 async function reserveAndAccept(
   testHarness: ReturnType<typeof harness>,
-  index: number
+  index: number,
 ) {
   const reserved = await testHarness.controller.reserve({
     scope,
@@ -210,7 +212,11 @@ describe("OpaqueProgressiveCooldownController", () => {
       DAY,
     ]);
     expect(DEFAULT_PROGRESSIVE_COOLDOWN_POLICY.resetAfterMs).toBe(48 * HOUR);
+    expect(
+      DEFAULT_PROGRESSIVE_COOLDOWN_POLICY.reconciliationRetentionMs,
+    ).toBe(6 * DAY);
     expect(MAX_PROGRESSIVE_COOLDOWN_MS).toBe(DAY);
+    expect(PROGRESSIVE_COOLDOWN_PURGE_SAFETY_MS).toBe(DAY);
   });
 
   it("reserves once and reports the exact active-lease retry", async () => {
@@ -283,15 +289,15 @@ describe("OpaqueProgressiveCooldownController", () => {
         testHarness.controller.reserve({
           scope,
           idempotencyKey: token(index),
-        })
-      )
+        }),
+      ),
     );
 
-    expect(results.filter((result) => result.status === "reserved")).toHaveLength(
-      1
-    );
     expect(
-      results.filter((result) => result.status === "reservation-active")
+      results.filter((result) => result.status === "reserved"),
+    ).toHaveLength(1);
+    expect(
+      results.filter((result) => result.status === "reservation-active"),
     ).toHaveLength(19);
   });
 
@@ -313,7 +319,9 @@ describe("OpaqueProgressiveCooldownController", () => {
     });
 
     expect(result).toEqual({ status: "acceptance-not-found" });
-    expect(await testHarness.controller.getEligibility({ scope })).toMatchObject({
+    expect(
+      await testHarness.controller.getEligibility({ scope }),
+    ).toMatchObject({
       status: "reservation-active",
     });
   });
@@ -342,15 +350,10 @@ describe("OpaqueProgressiveCooldownController", () => {
       }),
     ]);
 
-    expect([first.status, replay.status]).toEqual([
-      "committed",
-      "committed",
-    ]);
+    expect([first.status, replay.status]).toEqual(["committed", "committed"]);
     const commits = [first, replay].filter(
-      (
-        result
-      ): result is Extract<typeof result, { status: "committed" }> =>
-        result.status === "committed"
+      (result): result is Extract<typeof result, { status: "committed" }> =>
+        result.status === "committed",
     );
     expect(commits.map(({ replayed }) => replayed).sort()).toEqual([
       false,
@@ -401,7 +404,7 @@ describe("OpaqueProgressiveCooldownController", () => {
         scope,
         idempotencyKey: token(1),
         reservationId: reserved.reservationId,
-      })
+      }),
     ).toEqual({
       ...(committed as Extract<typeof committed, { status: "committed" }>),
       replayed: true,
@@ -411,7 +414,7 @@ describe("OpaqueProgressiveCooldownController", () => {
         scope,
         idempotencyKey: token(1),
         reservationId: reserved.reservationId,
-      })
+      }),
     ).toEqual({
       ...(committed as Extract<typeof committed, { status: "committed" }>),
       replayed: true,
@@ -420,21 +423,14 @@ describe("OpaqueProgressiveCooldownController", () => {
 
   it("applies 5m, 15m, 1h, 6h, 24h and then caps at 24h", async () => {
     const testHarness = harness();
-    const expected = [
-      5 * MINUTE,
-      15 * MINUTE,
-      HOUR,
-      6 * HOUR,
-      DAY,
-      DAY,
-    ];
+    const expected = [5 * MINUTE, 15 * MINUTE, HOUR, 6 * HOUR, DAY, DAY];
 
     for (const [index, durationMs] of expected.entries()) {
       const { committed } = await reserveAndAccept(testHarness, index);
       expect(committed.streak).toBe(Math.min(index + 1, 5));
       expect(committed.cooldownDurationMs).toBe(durationMs);
       expect(committed.cooldownUntilMs).toBe(
-        committed.committedAtMs + durationMs
+        committed.committedAtMs + durationMs,
       );
       testHarness.setNow(committed.cooldownUntilMs);
     }
@@ -512,17 +508,15 @@ describe("OpaqueProgressiveCooldownController", () => {
       throw new Error("expected reconciled commit");
     }
     expect(reconciledCommit.committedAtMs).toBeGreaterThanOrEqual(
-      laterCommit.committedAtMs
+      laterCommit.committedAtMs,
     );
     expect(reconciledCommit.cooldownUntilMs).toBeGreaterThanOrEqual(
-      laterCommit.cooldownUntilMs
+      laterCommit.cooldownUntilMs,
     );
 
     const state = (testHarness.store as AtomicMemoryStore).writes.at(-1);
     expect(state?.lastCommittedAtMs).toBe(reconciledCommit.committedAtMs);
-    expect(state?.cooldownUntilMs).toBe(
-      reconciledCommit.cooldownUntilMs
-    );
+    expect(state?.cooldownUntilMs).toBe(reconciledCommit.cooldownUntilMs);
   });
 
   it("fails closed when the clock moves behind persisted control events", async () => {
@@ -531,7 +525,7 @@ describe("OpaqueProgressiveCooldownController", () => {
     testHarness.setNow(START - 1);
 
     await expect(
-      testHarness.controller.getEligibility({ scope })
+      testHarness.controller.getEligibility({ scope }),
     ).resolves.toMatchObject({ status: "unavailable" });
   });
 
@@ -556,9 +550,9 @@ describe("OpaqueProgressiveCooldownController", () => {
       },
     });
 
-    await expect(
-      controller.getEligibility({ scope })
-    ).resolves.toMatchObject({ status: "unavailable" });
+    await expect(controller.getEligibility({ scope })).resolves.toMatchObject({
+      status: "unavailable",
+    });
   });
 
   it("resets to the first rung after exactly 48 quiet hours", async () => {
@@ -575,9 +569,7 @@ describe("OpaqueProgressiveCooldownController", () => {
   it("does not reset one millisecond before 48 quiet hours", async () => {
     const testHarness = harness();
     const first = await reserveAndAccept(testHarness, 1);
-    testHarness.setNow(
-      first.committed.committedAtMs + 48 * HOUR - 1
-    );
+    testHarness.setNow(first.committed.committedAtMs + 48 * HOUR - 1);
 
     const second = await reserveAndAccept(testHarness, 2);
 
@@ -706,7 +698,8 @@ describe("OpaqueProgressiveCooldownController", () => {
     expect(committed.status).toBe("committed");
   });
 
-  it("emits deletion deadlines within seven days of control expiry", async () => {
+  it("allows six days for reconciliation and one day for verified deletion", async () => {
+    expect(PROGRESSIVE_COOLDOWN_PURGE_SAFETY_MS).toBe(DAY);
     const testHarness = harness();
     const reserved = await testHarness.controller.reserve({
       scope,
@@ -717,11 +710,11 @@ describe("OpaqueProgressiveCooldownController", () => {
     }
     const store = testHarness.store as AtomicMemoryStore;
     const reservedState = store.writes.at(-1);
-    expect(reservedState?.reservations[0]?.retainUntilMs).toBe(
-      reserved.leaseExpiresAtMs + 7 * DAY
+    expect(reservedState?.reservations[0]?.reconciliationUntilMs).toBe(
+      reserved.leaseExpiresAtMs + 6 * DAY,
     );
-    expect(reservedState?.purgeAfterMs).toBe(
-      reserved.leaseExpiresAtMs + 7 * DAY
+    expect(reservedState?.hardDeleteByMs).toBe(
+      reserved.leaseExpiresAtMs + 7 * DAY,
     );
 
     testHarness.accepted.add(reserved.reservationId);
@@ -734,11 +727,11 @@ describe("OpaqueProgressiveCooldownController", () => {
       throw new Error("expected commit");
     }
     const committedState = store.writes.at(-1);
-    expect(committedState?.purgeAfterMs).toBe(
-      committed.committedAtMs + 48 * HOUR + 7 * DAY
+    expect(committedState?.reservations[0]?.reconciliationUntilMs).toBe(
+      committed.committedAtMs + 48 * HOUR + 6 * DAY,
     );
-    expect(committedState?.reservations[0]?.retainUntilMs).toBe(
-      committedState?.purgeAfterMs
+    expect(committedState?.hardDeleteByMs).toBe(
+      committed.committedAtMs + 48 * HOUR + 7 * DAY,
     );
   });
 
@@ -762,10 +755,10 @@ describe("OpaqueProgressiveCooldownController", () => {
     }
 
     const state = (testHarness.store as AtomicMemoryStore).writes.at(-1);
-    expect(state?.reservations[0]?.retainUntilMs).toBe(
-      released.releasedAtMs + 7 * DAY
+    expect(state?.reservations[0]?.reconciliationUntilMs).toBe(
+      released.releasedAtMs + 6 * DAY,
     );
-    expect(state?.purgeAfterMs).toBe(released.releasedAtMs + 7 * DAY);
+    expect(state?.hardDeleteByMs).toBe(released.releasedAtMs + 7 * DAY);
   });
 
   it("denies new work when bounded reconciliation records reach capacity", async () => {
@@ -773,7 +766,7 @@ describe("OpaqueProgressiveCooldownController", () => {
       policy: {
         maxReservationRecords: 1,
         reservationLeaseMs: MINUTE,
-        retentionAfterExpiryMs: MINUTE,
+        reconciliationRetentionMs: MINUTE,
       },
     });
     const first = await testHarness.controller.reserve({
@@ -783,6 +776,13 @@ describe("OpaqueProgressiveCooldownController", () => {
     if (first.status !== "reserved") {
       throw new Error("expected reservation");
     }
+    const persisted = (testHarness.store as AtomicMemoryStore).writes.at(-1);
+    expect(persisted?.reservations[0]?.reconciliationUntilMs).toBe(
+      first.leaseExpiresAtMs + MINUTE,
+    );
+    expect(persisted?.hardDeleteByMs).toBe(
+      first.leaseExpiresAtMs + MINUTE + DAY,
+    );
     testHarness.setNow(first.leaseExpiresAtMs);
 
     const result = await testHarness.controller.reserve({
@@ -803,10 +803,10 @@ describe("OpaqueProgressiveCooldownController", () => {
       "short reservation lease",
       () => {
         const leaseExpiresAtMs = START + 5 * MINUTE - 1;
-        const retainUntilMs = leaseExpiresAtMs + 7 * DAY;
+        const reconciliationUntilMs = leaseExpiresAtMs + 6 * DAY;
         return reservedControlState(
-          { leaseExpiresAtMs, retainUntilMs },
-          { purgeAfterMs: retainUntilMs }
+          { leaseExpiresAtMs, reconciliationUntilMs },
+          { hardDeleteByMs: reconciliationUntilMs + DAY },
         );
       },
     ],
@@ -814,30 +814,30 @@ describe("OpaqueProgressiveCooldownController", () => {
       "long reservation lease",
       () => {
         const leaseExpiresAtMs = START + DAY;
-        const retainUntilMs = leaseExpiresAtMs + 7 * DAY;
+        const reconciliationUntilMs = leaseExpiresAtMs + 6 * DAY;
         return reservedControlState(
-          { leaseExpiresAtMs, retainUntilMs },
-          { purgeAfterMs: retainUntilMs }
+          { leaseExpiresAtMs, reconciliationUntilMs },
+          { hardDeleteByMs: reconciliationUntilMs + DAY },
         );
       },
     ],
     [
       "short reserved retention",
       () => {
-        const retainUntilMs = START + 5 * MINUTE + 7 * DAY - 1;
+        const reconciliationUntilMs = START + 5 * MINUTE + 6 * DAY - 1;
         return reservedControlState(
-          { retainUntilMs },
-          { purgeAfterMs: retainUntilMs }
+          { reconciliationUntilMs },
+          { hardDeleteByMs: reconciliationUntilMs + DAY },
         );
       },
     ],
     [
       "year-long reserved retention",
       () => {
-        const retainUntilMs = START + 365 * DAY;
+        const reconciliationUntilMs = START + 365 * DAY;
         return reservedControlState(
-          { retainUntilMs },
-          { purgeAfterMs: retainUntilMs }
+          { reconciliationUntilMs },
+          { hardDeleteByMs: reconciliationUntilMs + DAY },
         );
       },
     ],
@@ -846,7 +846,7 @@ describe("OpaqueProgressiveCooldownController", () => {
       () =>
         reservedControlState(
           {},
-          { purgeAfterMs: START + 5 * MINUTE + 7 * DAY - 1 }
+          { hardDeleteByMs: START + 5 * MINUTE + 7 * DAY - 1 },
         ),
     ],
     [
@@ -854,7 +854,7 @@ describe("OpaqueProgressiveCooldownController", () => {
       () =>
         reservedControlState(
           {},
-          { purgeAfterMs: START + 5 * MINUTE + 7 * DAY + 1 }
+          { hardDeleteByMs: START + 5 * MINUTE + 7 * DAY + 1 },
         ),
     ],
     [
@@ -862,10 +862,10 @@ describe("OpaqueProgressiveCooldownController", () => {
       () => {
         const reservedAtMs = START + 1;
         const leaseExpiresAtMs = reservedAtMs + 5 * MINUTE;
-        const retainUntilMs = leaseExpiresAtMs + 7 * DAY;
+        const reconciliationUntilMs = leaseExpiresAtMs + 6 * DAY;
         return reservedControlState(
-          { reservedAtMs, leaseExpiresAtMs, retainUntilMs },
-          { purgeAfterMs: retainUntilMs }
+          { reservedAtMs, leaseExpiresAtMs, reconciliationUntilMs },
+          { hardDeleteByMs: reconciliationUntilMs + DAY },
         );
       },
     ],
@@ -877,9 +877,7 @@ describe("OpaqueProgressiveCooldownController", () => {
         }),
     ],
   ])("fails closed for a persisted %s", async (_, createState) => {
-    await expect(
-      eligibilityForPersistedState(createState())
-    ).resolves.toEqual({
+    await expect(eligibilityForPersistedState(createState())).resolves.toEqual({
       status: "unavailable",
       retryAtMs: START + 30_000,
       retryAfterSeconds: 30,
@@ -892,8 +890,8 @@ describe("OpaqueProgressiveCooldownController", () => {
         schemaVersion: "1",
         streak: 0,
         reservations: [],
-        purgeAfterMs: Number.MAX_SAFE_INTEGER,
-      })
+        hardDeleteByMs: Number.MAX_SAFE_INTEGER,
+      }),
     ).resolves.toMatchObject({ status: "unavailable" });
   });
 
@@ -902,14 +900,14 @@ describe("OpaqueProgressiveCooldownController", () => {
       "release",
       () => {
         const releasedAtMs = START + 1;
-        const retainUntilMs = releasedAtMs + 7 * DAY;
+        const reconciliationUntilMs = releasedAtMs + 6 * DAY;
         return reservedControlState(
           {
             status: "released",
             releasedAtMs,
-            retainUntilMs,
+            reconciliationUntilMs,
           },
-          { purgeAfterMs: retainUntilMs }
+          { hardDeleteByMs: reconciliationUntilMs + DAY },
         );
       },
     ],
@@ -918,7 +916,7 @@ describe("OpaqueProgressiveCooldownController", () => {
       () => {
         const committedAtMs = START + 1;
         const cooldownUntilMs = committedAtMs + 5 * MINUTE;
-        const retainUntilMs = committedAtMs + 48 * HOUR + 7 * DAY;
+        const reconciliationUntilMs = committedAtMs + 48 * HOUR + 6 * DAY;
         const record: ProgressiveCooldownReservationRecord = {
           ...reservedControlState().reservations[0]!,
           status: "committed",
@@ -926,7 +924,7 @@ describe("OpaqueProgressiveCooldownController", () => {
           committedStreak: 1,
           cooldownDurationMs: 5 * MINUTE,
           cooldownUntilMs,
-          retainUntilMs,
+          reconciliationUntilMs,
         };
         return {
           schemaVersion: "1" as const,
@@ -934,13 +932,13 @@ describe("OpaqueProgressiveCooldownController", () => {
           lastCommittedAtMs: committedAtMs,
           cooldownUntilMs,
           reservations: [record],
-          purgeAfterMs: retainUntilMs,
+          hardDeleteByMs: reconciliationUntilMs + DAY,
         };
       },
     ],
   ])("fails closed for a future persisted %s event", async (_, createState) => {
     await expect(
-      eligibilityForPersistedState(createState())
+      eligibilityForPersistedState(createState()),
     ).resolves.toMatchObject({ status: "unavailable" });
   });
 
@@ -953,7 +951,7 @@ describe("OpaqueProgressiveCooldownController", () => {
       status: "committed",
       reservedAtMs: earlierCommittedAtMs,
       leaseExpiresAtMs: earlierCommittedAtMs + 5 * MINUTE,
-      retainUntilMs: earlierCommittedAtMs + 48 * HOUR + 7 * DAY,
+      reconciliationUntilMs: earlierCommittedAtMs + 48 * HOUR + 6 * DAY,
       committedAtMs: earlierCommittedAtMs,
       committedStreak: 5,
       cooldownDurationMs: DAY,
@@ -965,7 +963,7 @@ describe("OpaqueProgressiveCooldownController", () => {
       status: "committed",
       reservedAtMs: latestCommittedAtMs,
       leaseExpiresAtMs: latestCommittedAtMs + 5 * MINUTE,
-      retainUntilMs: latestCommittedAtMs + 48 * HOUR + 7 * DAY,
+      reconciliationUntilMs: latestCommittedAtMs + 48 * HOUR + 6 * DAY,
       committedAtMs: latestCommittedAtMs,
       committedStreak: 1,
       cooldownDurationMs: 5 * MINUTE,
@@ -977,11 +975,11 @@ describe("OpaqueProgressiveCooldownController", () => {
       lastCommittedAtMs: latestCommittedAtMs,
       cooldownUntilMs: latest.cooldownUntilMs,
       reservations: [earlier, latest],
-      purgeAfterMs: latest.retainUntilMs,
+      hardDeleteByMs: latest.reconciliationUntilMs + DAY,
     };
 
     await expect(
-      eligibilityForPersistedState(corruptState)
+      eligibilityForPersistedState(corruptState),
     ).resolves.toMatchObject({ status: "unavailable" });
   });
 
@@ -991,7 +989,7 @@ describe("OpaqueProgressiveCooldownController", () => {
       narrative: "must never enter control storage",
     } as unknown as ProgressiveCooldownState;
     await expect(
-      eligibilityForPersistedState(stateWithUnknownField)
+      eligibilityForPersistedState(stateWithUnknownField),
     ).resolves.toMatchObject({ status: "unavailable" });
 
     const controller = new OpaqueProgressiveCooldownController({
@@ -1009,9 +1007,9 @@ describe("OpaqueProgressiveCooldownController", () => {
       },
       clock: { nowMs: () => START },
     });
-    await expect(
-      controller.getEligibility({ scope })
-    ).resolves.toMatchObject({ status: "unavailable" });
+    await expect(controller.getEligibility({ scope })).resolves.toMatchObject({
+      status: "unavailable",
+    });
   });
 
   it.each([-1, 1])(
@@ -1035,17 +1033,17 @@ describe("OpaqueProgressiveCooldownController", () => {
       if (!state || !record) {
         throw new Error("expected released state");
       }
-      const retainUntilMs = record.retainUntilMs + deltaMs;
+      const reconciliationUntilMs = record.reconciliationUntilMs + deltaMs;
       const corruptState = {
         ...state,
-        reservations: [{ ...record, retainUntilMs }],
-        purgeAfterMs: retainUntilMs,
+        reservations: [{ ...record, reconciliationUntilMs }],
+        hardDeleteByMs: reconciliationUntilMs + DAY,
       };
 
       await expect(
-        eligibilityForPersistedState(corruptState)
+        eligibilityForPersistedState(corruptState),
       ).resolves.toMatchObject({ status: "unavailable" });
-    }
+    },
   );
 
   it.each([-1, 1])(
@@ -1058,17 +1056,17 @@ describe("OpaqueProgressiveCooldownController", () => {
       if (!state || !record) {
         throw new Error("expected committed state");
       }
-      const retainUntilMs = record.retainUntilMs + deltaMs;
+      const reconciliationUntilMs = record.reconciliationUntilMs + deltaMs;
       const corruptState = {
         ...state,
-        reservations: [{ ...record, retainUntilMs }],
-        purgeAfterMs: retainUntilMs,
+        reservations: [{ ...record, reconciliationUntilMs }],
+        hardDeleteByMs: reconciliationUntilMs + DAY,
       };
 
       await expect(
-        eligibilityForPersistedState(corruptState, committed.committedAtMs)
+        eligibilityForPersistedState(corruptState, committed.committedAtMs),
       ).resolves.toMatchObject({ status: "unavailable" });
-    }
+    },
   );
 
   it.each([-1, 1])(
@@ -1081,8 +1079,7 @@ describe("OpaqueProgressiveCooldownController", () => {
       if (!state || !record || record.status !== "committed") {
         throw new Error("expected committed state");
       }
-      const cooldownUntilMs =
-        (record.cooldownUntilMs ?? 0) + deltaMs;
+      const cooldownUntilMs = (record.cooldownUntilMs ?? 0) + deltaMs;
       const corruptState = {
         ...state,
         cooldownUntilMs,
@@ -1090,9 +1087,9 @@ describe("OpaqueProgressiveCooldownController", () => {
       };
 
       await expect(
-        eligibilityForPersistedState(corruptState, committed.committedAtMs)
+        eligibilityForPersistedState(corruptState, committed.committedAtMs),
       ).resolves.toMatchObject({ status: "unavailable" });
-    }
+    },
   );
 
   it("does not persist the source subject, purpose, or idempotency token", async () => {
@@ -1112,7 +1109,7 @@ describe("OpaqueProgressiveCooldownController", () => {
     expect(persisted).not.toContain(scope.purpose);
     expect(persisted).not.toContain(token(1));
     expect(memoryStore.keys[0]).toMatch(
-      /^fbs1\.[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u
+      /^fbs1\.[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u,
     );
     const expectedStateKey = createHash("sha256")
       .update("opaque-progressive-cooldown:v1", "utf8")
@@ -1127,7 +1124,7 @@ describe("OpaqueProgressiveCooldownController", () => {
     const encodedStateKey = memoryStore.keys[0]?.slice("fbs1.".length);
     expect(Buffer.from(encodedStateKey ?? "", "base64url")).toHaveLength(32);
     expect(
-      Buffer.from(encodedStateKey ?? "", "base64url").toString("base64url")
+      Buffer.from(encodedStateKey ?? "", "base64url").toString("base64url"),
     ).toBe(encodedStateKey);
   });
 
@@ -1149,15 +1146,11 @@ describe("OpaqueProgressiveCooldownController", () => {
     if (reserved.status !== "reserved") {
       throw new Error("expected reservation");
     }
-    expect(reserved.reservationId).toMatch(
-      /^fbr1\.[A-Za-z0-9_-]{21}[AQgw]$/u
-    );
-    const encodedReservationId = reserved.reservationId.slice(
-      "fbr1.".length
-    );
+    expect(reserved.reservationId).toMatch(/^fbr1\.[A-Za-z0-9_-]{21}[AQgw]$/u);
+    const encodedReservationId = reserved.reservationId.slice("fbr1.".length);
     expect(Buffer.from(encodedReservationId, "base64url")).toHaveLength(16);
     expect(
-      Buffer.from(encodedReservationId, "base64url").toString("base64url")
+      Buffer.from(encodedReservationId, "base64url").toString("base64url"),
     ).toBe(encodedReservationId);
   });
 
@@ -1183,19 +1176,22 @@ describe("OpaqueProgressiveCooldownController", () => {
     ["wrong byte length", "A".repeat(42)],
     ["padded base64", `${"A".repeat(42)}=`],
     ["non-canonical base64url alias", `${"A".repeat(42)}B`],
-  ])("rejects a %s instead of accepting it as an opaque subject", async (_, value) => {
-    const testHarness = harness();
-    await expect(
-      testHarness.controller.reserve({
-        scope: { ...scope, opaqueSubjectKey: value },
-        idempotencyKey: token(1),
-      })
-    ).rejects.toMatchObject({
-      name: "ProgressiveCooldownInputError",
-      code: "invalid-opaque-subject",
-      message: "Invalid progressive cooldown input.",
-    });
-  });
+  ])(
+    "rejects a %s instead of accepting it as an opaque subject",
+    async (_, value) => {
+      const testHarness = harness();
+      await expect(
+        testHarness.controller.reserve({
+          scope: { ...scope, opaqueSubjectKey: value },
+          idempotencyKey: token(1),
+        }),
+      ).rejects.toMatchObject({
+        name: "ProgressiveCooldownInputError",
+        code: "invalid-opaque-subject",
+        message: "Invalid progressive cooldown input.",
+      });
+    },
+  );
 
   it("uses closed validation errors without reflecting unsafe input", async () => {
     const testHarness = harness();
@@ -1205,20 +1201,20 @@ describe("OpaqueProgressiveCooldownController", () => {
       testHarness.controller.reserve({
         scope: { ...scope, purpose: unsafe },
         idempotencyKey: token(1),
-      })
+      }),
     ).rejects.not.toThrow(unsafe);
     await expect(
       testHarness.controller.reserve({
         scope,
         idempotencyKey: "person@example.com",
-      })
+      }),
     ).rejects.toBeInstanceOf(ProgressiveCooldownInputError);
     await expect(
       testHarness.controller.release({
         scope,
         idempotencyKey: token(1),
         reservationId: `fbr1.${"A".repeat(21)}B`,
-      })
+      }),
     ).rejects.toMatchObject({
       code: "invalid-reservation-id",
       message: "Invalid progressive cooldown input.",
@@ -1239,7 +1235,7 @@ describe("OpaqueProgressiveCooldownController", () => {
       testHarness.controller.reserve({
         scope,
         idempotencyKey: token(1),
-      })
+      }),
     ).resolves.toEqual({
       status: "unavailable",
       retryAtMs: START + 30_000,
@@ -1341,7 +1337,7 @@ describe("OpaqueProgressiveCooldownController", () => {
       testHarness.controller.reserve({
         scope,
         idempotencyKey: token(1),
-      })
+      }),
     ).resolves.toMatchObject({
       status: "reserved",
       replayed: true,
@@ -1363,7 +1359,7 @@ describe("OpaqueProgressiveCooldownController", () => {
       await testHarness.controller.reserve({
         scope,
         idempotencyKey: token(1),
-      })
+      }),
     ).toEqual({
       status: "unavailable",
       retryAtMs: START + 30_000,
@@ -1408,7 +1404,7 @@ describe("OpaqueProgressiveCooldownController", () => {
       await testHarness.controller.reserve({
         scope,
         idempotencyKey: token(1),
-      })
+      }),
     ).toMatchObject({ status: "unavailable" });
   });
 
@@ -1448,7 +1444,7 @@ describe("OpaqueProgressiveCooldownController", () => {
         scope,
         idempotencyKey: token(1),
         reservationId: reserved.reservationId,
-      })
+      }),
     ).toEqual({
       status: "unavailable",
       retryAtMs: START + 30_000,
@@ -1484,7 +1480,7 @@ describe("OpaqueProgressiveCooldownController", () => {
         scope,
         idempotencyKey: token(1),
         reservationId: reserved.reservationId,
-      })
+      }),
     ).toEqual({
       status: "unavailable",
       retryAtMs: nowMs + 30_000,
@@ -1502,7 +1498,7 @@ describe("OpaqueProgressiveCooldownController", () => {
               schemaVersion: "1",
               streak: -1,
               reservations: [],
-              purgeAfterMs: START,
+              hardDeleteByMs: START,
             },
           }) as ProgressiveCooldownSnapshot,
         compareAndSwap: async () => ({ applied: true, revision: "revision-2" }),
@@ -1537,7 +1533,7 @@ describe("OpaqueProgressiveCooldownController", () => {
         scope,
         idempotencyKey: token(2),
         reservationId: reserved.reservationId,
-      })
+      }),
     ).toEqual({ status: "reservation-mismatch" });
   });
 
@@ -1553,7 +1549,7 @@ describe("OpaqueProgressiveCooldownController", () => {
           store,
           acceptanceVerifier,
           policy: { cooldownLadderMs: [5 * MINUTE, DAY + 1] },
-        })
+        }),
     ).toThrowError(ProgressiveCooldownInputError);
     expect(
       () =>
@@ -1561,7 +1557,15 @@ describe("OpaqueProgressiveCooldownController", () => {
           store,
           acceptanceVerifier,
           policy: { cooldownLadderMs: [15 * MINUTE, 5 * MINUTE] },
-        })
+        }),
+    ).toThrowError(ProgressiveCooldownInputError);
+    expect(
+      () =>
+        new OpaqueProgressiveCooldownController({
+          store,
+          acceptanceVerifier,
+          policy: { reconciliationRetentionMs: 6 * DAY + 1 },
+        }),
     ).toThrowError(ProgressiveCooldownInputError);
     expect(
       () =>
@@ -1569,7 +1573,7 @@ describe("OpaqueProgressiveCooldownController", () => {
           store,
           acceptanceVerifier,
           clock: { nowMs: () => Number.NaN },
-        })
+        }),
     ).not.toThrow();
   });
 
@@ -1595,7 +1599,7 @@ describe("OpaqueProgressiveCooldownController", () => {
       reservationIdFactory: () => SUBJECT,
     });
     expect(
-      await badId.reserve({ scope, idempotencyKey: token(1) })
+      await badId.reserve({ scope, idempotencyKey: token(1) }),
     ).toMatchObject({ status: "unavailable" });
   });
 
@@ -1622,7 +1626,7 @@ describe("OpaqueProgressiveCooldownController", () => {
       await controller.reserve({
         scope,
         idempotencyKey: token(1),
-      })
+      }),
     ).toEqual({
       status: "unavailable",
       retryAfterSeconds: 30,

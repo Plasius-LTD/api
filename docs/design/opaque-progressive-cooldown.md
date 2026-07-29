@@ -80,10 +80,13 @@ available -> reserved -> committed -> cooldown -> available
 - Quiet reset: 48 hours after the last accepted commit.
 - Dependency-unavailable retry: 30 seconds.
 - Total store/verifier operation deadline: 2 seconds.
-- Reconciliation remains possible only while the control record is retained.
-- Control records are deleted no more than 7 days after the reservation lease,
-  release, cooldown, or quiet-reset expiry. The same total limit must cover live
-  data, soft deletion, and backups.
+- Reconciliation retention: 6 days after the reservation lease, release, or
+  quiet-reset expiry.
+- Live deletion starts when reconciliation retention expires.
+- The following fixed 24-hour safety window is reserved for asynchronous
+  deletion verification and bounded backup expiry. Live data, soft-deleted
+  copies, and backups must be absent no more than 7 days after the relevant
+  control expiry.
 
 Durations are configurable, but cooldown values must be non-decreasing and may
 never exceed 24 hours. `Retry-After` is the ceiling of the exact remaining
@@ -107,7 +110,7 @@ idempotency token. Persisted state therefore contains:
 It contains no source subject, purpose string, account identifier, IP address,
 fingerprint, request metadata, or content. The state key and its records remain
 pseudonymous personal data and must be isolated, access restricted, excluded from
-logs and analytics, and deleted according to the emitted `purgeAfterMs`.
+logs and analytics, and deleted according to the emitted `hardDeleteByMs`.
 
 The package has no logger and all public errors use closed codes without
 reflecting input or storage exceptions.
@@ -120,8 +123,10 @@ Store implementations must:
 - treat `expectedRevision: null` as create-if-absent;
 - return `applied: false` for a revision conflict;
 - return a fresh opaque revision for a successful write;
-- enforce the state's `purgeAfterMs` as an upper-bound TTL across live data,
-  soft deletion, and backups;
+- begin live deletion no later than the state's `hardDeleteByMs` minus
+  `PROGRESSIVE_COOLDOWN_PURGE_SAFETY_MS`;
+- ensure live data, soft-deleted copies, and backups are absent by
+  `hardDeleteByMs`;
 - honour the supplied abort signal and total operation deadline;
 - never log keys, state, revisions, or thrown dependency payloads;
 - use bounded request deadlines and fail by throwing on uncertainty.
@@ -137,7 +142,8 @@ matches the policy exactly:
 - released retention equals `releasedAt + retention`;
 - committed cooldowns equal their exact ladder rung;
 - committed retention equals `committedAt + quiet reset + retention`;
-- `purgeAfterMs` equals the latest required record/control deletion deadline;
+- `hardDeleteByMs` equals the latest reconciliation horizon plus the fixed
+  24-hour deletion/backup safety window;
 - event timestamps are not in the future and the latest committed timestamp
   does not precede another retained commit; and
 - retained commits follow the configured ladder exactly, including its quiet
@@ -158,8 +164,8 @@ Tests cover:
 - release/acceptance reconciliation;
 - expired reservation reconciliation;
 - held-verifier reconciliation racing a newer capped commit;
-- exact lease, release, commit, cooldown, purge, overflow, and clock-regression
-  boundaries;
+- exact lease, release, commit, cooldown, reconciliation, hard-delete,
+  overflow, and clock-regression boundaries;
 - forged retained commit histories that skip, regress, or reset ladder rungs;
 - unavailable stores/verifiers and exhausted revision conflicts;
 - malformed persisted state and unsafe ingress values;
