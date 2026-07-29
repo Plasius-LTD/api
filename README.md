@@ -151,11 +151,12 @@ configure a long-lived npm token.
 ## Public Artifact Integrity
 
 CI rejects the administrative contributor-registry path from both the exact Git
-index and the npm dry-run inventory without reading its contents. Same-repository
-pull requests and `main` run on the approved self-hosted runner group; fork code
-is never scheduled there. Release metadata lands through a unique pull request,
-then a second `cd.yml` run is dispatched from the exact successful `main` CI
-SHA. A read-only job validates and seals the package and SBOM before the
+index and the npm dry-run inventory without reading its contents.
+Same-repository pull requests run on GitHub-hosted runners; protected `main` CI
+uses the workflow-restricted self-hosted runner group, and fork code is never
+scheduled there. Release metadata lands through a unique pull request, then a
+second `cd.yml` run is dispatched from the exact successful `main` CI SHA. A
+read-only job validates and seals the package and SBOM before the
 GitHub-hosted `production` job verifies that immutable hand-off and publishes
 through npm OIDC with provenance. The privileged job runs no dependency or
 package lifecycle code, and no long-lived npm write token or fallback is

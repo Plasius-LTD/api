@@ -18,6 +18,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - (placeholder)
 
 - **Security**
+  - Moved pull-request validation to GitHub-hosted runners while retaining
+    fail-closed same-repository admission and workflow-restricted self-hosted
+    execution for protected `main`.
   - Removed long-lived npm write-token configuration in favour of
     workflow-bound OIDC trusted publishing, with dependency execution isolated
     from the privileged production publication job.
