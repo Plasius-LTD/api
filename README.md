@@ -126,20 +126,21 @@ npm run pack:check
 
 1. Update `CHANGELOG.md` under `Unreleased`.
 2. Run `npm ci && npm run clean && npm run build && npm test && npm run pack:check`.
-3. Bind the npm trusted publisher for `@plasius/api` to repository
+3. Before CD is re-enabled, bind the npm trusted publisher for `@plasius/api` to repository
    `Plasius-LTD/api`, workflow `cd.yml`, and environment `production`.
-4. Run the GitHub `cd.yml` workflow on `main`; it owns versioning, tagging, and
+4. Remove the legacy token fallback after the binding is verified, then run the
+   GitHub `cd.yml` workflow on `main`; it owns versioning, tagging, and
    publication through the `production` environment.
 
-Publication uses Node 24.18.0 LTS. Do not publish from a local machine or
-configure a long-lived npm token.
+The target path uses Node 24.18.0 LTS. Do not publish from a local machine.
 
 ## Public Artifact Integrity
 
 CI rejects the administrative contributor-registry path from both the exact Git
 index and the npm dry-run inventory without reading its contents. CI runs on the
 approved self-hosted runner group; package publication runs only through the
-GitHub-hosted `production` CD job using npm OIDC trusted publishing.
+GitHub-hosted `production` CD job. CD remains disabled until npm OIDC trusted
+publishing is verified.
 
 ## Governance
 
