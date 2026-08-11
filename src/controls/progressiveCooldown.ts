@@ -1633,6 +1633,15 @@ function parseState(
   if (latestCommittedRecord === "invalid") {
     return null;
   }
+  if (streak === 0 && latestCommittedRecord) {
+    const quietResetAtMs = addTimestamp(
+      latestCommittedRecord.committedAtMs,
+      policy.resetAfterMs,
+    );
+    if (quietResetAtMs === null || nowMs < quietResetAtMs) {
+      return null;
+    }
+  }
   if (streak > 0) {
     if (lastCommittedAtMs === undefined) {
       return null;

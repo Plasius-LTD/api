@@ -142,6 +142,8 @@ matches the policy exactly:
 - released retention equals `releasedAt + retention`;
 - committed cooldowns equal their exact ladder rung;
 - committed retention equals `committedAt + quiet reset + retention`;
+- zero-streak state may retain committed reconciliation history only at or after
+  the exact quiet-reset boundary;
 - `hardDeleteByMs` equals the latest reconciliation horizon plus the fixed
   24-hour deletion/backup safety window;
 - event timestamps are not in the future and the latest committed timestamp

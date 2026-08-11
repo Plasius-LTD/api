@@ -16,7 +16,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
     same immutable commit.
 
 - **Fixed**
-  - (placeholder)
+  - Rejected persisted zero-streak snapshots that retain an accepted commit
+    inside the 48-hour quiet-reset window, preventing a malformed control state
+    from bypassing the progressive cooldown ladder.
 
 - **Security**
   - Moved pull-request validation to GitHub-hosted runners while retaining

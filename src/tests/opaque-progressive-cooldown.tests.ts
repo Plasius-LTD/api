@@ -577,6 +577,58 @@ describe("OpaqueProgressiveCooldownController", () => {
     expect(second.committed.cooldownDurationMs).toBe(15 * MINUTE);
   });
 
+  it("fails closed when zeroed state retains a commit inside the quiet-reset window", async () => {
+    const committedAtMs = START - 48 * HOUR + 1;
+    const reconciliationUntilMs = committedAtMs + 48 * HOUR + 6 * DAY;
+    const retainedCommit: ProgressiveCooldownReservationRecord = {
+      reservationId: RESERVATION_IDS[0],
+      idempotencyDigest: "A".repeat(43),
+      status: "committed",
+      reservedAtMs: committedAtMs,
+      leaseExpiresAtMs: committedAtMs + 5 * MINUTE,
+      reconciliationUntilMs,
+      committedAtMs,
+      committedStreak: 1,
+      cooldownDurationMs: 5 * MINUTE,
+      cooldownUntilMs: committedAtMs + 5 * MINUTE,
+    };
+
+    await expect(
+      eligibilityForPersistedState({
+        schemaVersion: "1",
+        streak: 0,
+        reservations: [retainedCommit],
+        hardDeleteByMs: reconciliationUntilMs + DAY,
+      }),
+    ).resolves.toMatchObject({ status: "unavailable" });
+  });
+
+  it("accepts zeroed state with retained commit at the exact quiet-reset boundary", async () => {
+    const committedAtMs = START - 48 * HOUR;
+    const reconciliationUntilMs = committedAtMs + 48 * HOUR + 6 * DAY;
+    const retainedCommit: ProgressiveCooldownReservationRecord = {
+      reservationId: RESERVATION_IDS[0],
+      idempotencyDigest: "A".repeat(43),
+      status: "committed",
+      reservedAtMs: committedAtMs,
+      leaseExpiresAtMs: committedAtMs + 5 * MINUTE,
+      reconciliationUntilMs,
+      committedAtMs,
+      committedStreak: 1,
+      cooldownDurationMs: 5 * MINUTE,
+      cooldownUntilMs: committedAtMs + 5 * MINUTE,
+    };
+
+    await expect(
+      eligibilityForPersistedState({
+        schemaVersion: "1",
+        streak: 0,
+        reservations: [retainedCommit],
+        hardDeleteByMs: reconciliationUntilMs + DAY,
+      }),
+    ).resolves.toEqual({ status: "available", streak: 0 });
+  });
+
   it("returns exact cooldown eligibility and then becomes available", async () => {
     const testHarness = harness();
     const { committed } = await reserveAndAccept(testHarness, 1);
