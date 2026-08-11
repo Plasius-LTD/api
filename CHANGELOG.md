@@ -19,6 +19,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
     same immutable commit.
 
 - **Fixed**
+  - Closed a same-idempotency reservation-release race by issuing request-local
+    write authority once, atomically admitting immutable writes, denying release
+    after write admission, and keeping ambiguous writes reconciliation-only.
   - Rejected persisted zero-streak snapshots that retain an accepted commit
     inside the 48-hour quiet-reset window, preventing a malformed control state
     from bypassing the progressive cooldown ladder.

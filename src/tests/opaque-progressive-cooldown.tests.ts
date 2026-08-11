@@ -28,6 +28,12 @@ function reservationId(index: number): string {
   return `fbr1.${bytes.toString("base64url")}`;
 }
 
+function attemptToken(index: number): string {
+  const bytes = Buffer.alloc(16);
+  bytes.writeUInt32BE(index, 12);
+  return `fba1.${bytes.toString("base64url")}`;
+}
+
 const RESERVATION_IDS = [
   reservationId(1),
   reservationId(2),
@@ -141,6 +147,7 @@ function harness(options?: {
       idIndex += 1;
       return reservationId(idIndex);
     },
+    attemptTokenFactory: () => attemptToken(idIndex),
     policy: options?.policy,
   });
 
@@ -310,6 +317,8 @@ describe("OpaqueProgressiveCooldownController", () => {
       reservationId: RESERVATION_IDS[0],
       reservedAtMs: START,
       leaseExpiresAtMs: START + 5 * MINUTE,
+      attemptGeneration: 1,
+      attemptToken: attemptToken(1),
     });
 
     testHarness.advance(1_250);
@@ -354,10 +363,124 @@ describe("OpaqueProgressiveCooldownController", () => {
     });
 
     expect(first.status).toBe("reserved");
-    expect(replay).toEqual({
-      ...(first as Extract<typeof first, { status: "reserved" }>),
-      replayed: true,
+    expect(first).toMatchObject({
+      status: "reserved",
+      replayed: false,
+      attemptGeneration: 1,
+      attemptToken: attemptToken(1),
     });
+    expect(replay).toEqual({
+      status: "attempt-pending",
+      reservationId: RESERVATION_IDS[0],
+      reservedAtMs: START,
+      leaseExpiresAtMs: START + 5 * MINUTE,
+    });
+    expect(replay).not.toHaveProperty("attemptToken");
+  });
+
+  it("atomically begins immutable write and rejects every later release", async () => {
+    const testHarness = harness();
+    const reserved = await testHarness.controller.reserve({
+      scope,
+      idempotencyKey: token(1),
+    });
+    if (reserved.status !== "reserved") {
+      throw new Error("expected reservation owner");
+    }
+
+    const begun = await testHarness.controller.beginImmutableWrite({
+      scope,
+      idempotencyKey: token(1),
+      reservationId: reserved.reservationId,
+      attemptGeneration: reserved.attemptGeneration,
+      attemptToken: reserved.attemptToken,
+    });
+    const release = await testHarness.controller.release({
+      scope,
+      idempotencyKey: token(1),
+      reservationId: reserved.reservationId,
+      attemptGeneration: reserved.attemptGeneration,
+      attemptToken: reserved.attemptToken,
+    });
+
+    expect(begun).toEqual({
+      status: "write-started",
+      replayed: false,
+      reservationId: reserved.reservationId,
+      writeStartedAtMs: START,
+      reconciliationUntilMs: START + 5 * MINUTE + 6 * DAY,
+    });
+    expect(release).toEqual({
+      status: "write-in-progress",
+      reservationId: reserved.reservationId,
+      reconciliationUntilMs: START + 5 * MINUTE + 6 * DAY,
+    });
+
+    const state = (testHarness.store as AtomicMemoryStore).writes.at(-1);
+    expect(state?.reservations[0]).toMatchObject({
+      status: "writing",
+      attemptGeneration: 1,
+      writeStartedAtMs: START,
+    });
+    expect(JSON.stringify(state)).not.toContain(reserved.attemptToken);
+  });
+
+  it("rejects stale or replay-owned release authority before immutable write", async () => {
+    const testHarness = harness();
+    const reserved = await testHarness.controller.reserve({
+      scope,
+      idempotencyKey: token(1),
+    });
+    if (reserved.status !== "reserved") {
+      throw new Error("expected reservation owner");
+    }
+
+    const staleRelease = await testHarness.controller.release({
+      scope,
+      idempotencyKey: token(1),
+      reservationId: reserved.reservationId,
+      attemptGeneration: reserved.attemptGeneration,
+      attemptToken: attemptToken(2),
+    });
+
+    expect(staleRelease).toEqual({ status: "attempt-mismatch" });
+    expect(await testHarness.controller.reserve({
+      scope,
+      idempotencyKey: token(1),
+    })).toMatchObject({ status: "attempt-pending" });
+    expect((testHarness.store as AtomicMemoryStore).writes.at(-1)?.reservations[0])
+      .toMatchObject({ status: "reserved" });
+  });
+
+  it("prevents immutable write when the owner releases before begin", async () => {
+    const testHarness = harness();
+    const reserved = await testHarness.controller.reserve({
+      scope,
+      idempotencyKey: token(1),
+    });
+    if (reserved.status !== "reserved") {
+      throw new Error("expected reservation owner");
+    }
+
+    const released = await testHarness.controller.release({
+      scope,
+      idempotencyKey: token(1),
+      reservationId: reserved.reservationId,
+      attemptGeneration: reserved.attemptGeneration,
+      attemptToken: reserved.attemptToken,
+    });
+    const beginAfterRelease = await testHarness.controller.beginImmutableWrite({
+      scope,
+      idempotencyKey: token(1),
+      reservationId: reserved.reservationId,
+      attemptGeneration: reserved.attemptGeneration,
+      attemptToken: reserved.attemptToken,
+    });
+
+    expect(released).toMatchObject({ status: "released", replayed: false });
+    expect(beginAfterRelease).toEqual({ ...released, replayed: true });
+    expect((testHarness.store as AtomicMemoryStore).writes.at(-1)?.reservations[0])
+      .toMatchObject({ status: "released" });
   });
 
   it("allows only one concurrent reservation for a scope", async () => {
@@ -492,6 +615,8 @@ describe("OpaqueProgressiveCooldownController", () => {
         scope,
         idempotencyKey: token(1),
         reservationId: reserved.reservationId,
+        attemptGeneration: reserved.attemptGeneration,
+        attemptToken: reserved.attemptToken,
       }),
     ).toEqual({
       ...(committed as Extract<typeof committed, { status: "committed" }>),
@@ -553,6 +678,8 @@ describe("OpaqueProgressiveCooldownController", () => {
       scope,
       idempotencyKey: token(10),
       reservationId: held.reservationId,
+      attemptGeneration: held.attemptGeneration,
+      attemptToken: held.attemptToken,
     });
 
     const delayedCommit = testHarness.controller.commitAccepted({
@@ -748,11 +875,15 @@ describe("OpaqueProgressiveCooldownController", () => {
       scope,
       idempotencyKey: token(1),
       reservationId: reserved.reservationId,
+      attemptGeneration: reserved.attemptGeneration,
+      attemptToken: reserved.attemptToken,
     });
     const replay = await testHarness.controller.release({
       scope,
       idempotencyKey: token(1),
       reservationId: reserved.reservationId,
+      attemptGeneration: reserved.attemptGeneration,
+      attemptToken: reserved.attemptToken,
     });
 
     expect(first).toEqual({
@@ -781,6 +912,8 @@ describe("OpaqueProgressiveCooldownController", () => {
       scope,
       idempotencyKey: token(1),
       reservationId: reserved.reservationId,
+      attemptGeneration: reserved.attemptGeneration,
+      attemptToken: reserved.attemptToken,
     });
     testHarness.accepted.add(reserved.reservationId);
 
@@ -817,6 +950,7 @@ describe("OpaqueProgressiveCooldownController", () => {
       status: "pending-reconciliation",
       reservationId: reserved.reservationId,
       leaseExpiredAtMs: reserved.leaseExpiresAtMs,
+      reconciliationUntilMs: reserved.leaseExpiresAtMs + 6 * DAY,
     });
 
     testHarness.accepted.add(reserved.reservationId);
@@ -879,6 +1013,8 @@ describe("OpaqueProgressiveCooldownController", () => {
       scope,
       idempotencyKey: token(1),
       reservationId: reserved.reservationId,
+      attemptGeneration: reserved.attemptGeneration,
+      attemptToken: reserved.attemptToken,
     });
     if (released.status !== "released") {
       throw new Error("expected release");
@@ -1157,6 +1293,8 @@ describe("OpaqueProgressiveCooldownController", () => {
         scope,
         idempotencyKey: token(1),
         reservationId: reserved.reservationId,
+        attemptGeneration: reserved.attemptGeneration,
+        attemptToken: reserved.attemptToken,
       });
       const state = (testHarness.store as AtomicMemoryStore).writes.at(-1);
       const record = state?.reservations[0];
@@ -1224,10 +1362,13 @@ describe("OpaqueProgressiveCooldownController", () => {
 
   it("does not persist the source subject, purpose, or idempotency token", async () => {
     const testHarness = harness();
-    await testHarness.controller.reserve({
+    const reserved = await testHarness.controller.reserve({
       scope,
       idempotencyKey: token(1),
     });
+    if (reserved.status !== "reserved") {
+      throw new Error("expected reservation owner");
+    }
 
     const memoryStore = testHarness.store as AtomicMemoryStore;
     const persisted = JSON.stringify({
@@ -1238,6 +1379,7 @@ describe("OpaqueProgressiveCooldownController", () => {
     expect(persisted).not.toContain(scope.opaqueSubjectKey);
     expect(persisted).not.toContain(scope.purpose);
     expect(persisted).not.toContain(token(1));
+    expect(persisted).not.toContain(reserved.attemptToken);
     expect(memoryStore.keys[0]).toMatch(
       /^fbs1\.[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u,
     );
@@ -1277,11 +1419,17 @@ describe("OpaqueProgressiveCooldownController", () => {
       throw new Error("expected reservation");
     }
     expect(reserved.reservationId).toMatch(/^fbr1\.[A-Za-z0-9_-]{21}[AQgw]$/u);
+    expect(reserved.attemptToken).toMatch(/^fba1\.[A-Za-z0-9_-]{21}[AQgw]$/u);
     const encodedReservationId = reserved.reservationId.slice("fbr1.".length);
     expect(Buffer.from(encodedReservationId, "base64url")).toHaveLength(16);
     expect(
       Buffer.from(encodedReservationId, "base64url").toString("base64url"),
     ).toBe(encodedReservationId);
+    const encodedAttemptToken = reserved.attemptToken.slice("fba1.".length);
+    expect(Buffer.from(encodedAttemptToken, "base64url")).toHaveLength(16);
+    expect(
+      Buffer.from(encodedAttemptToken, "base64url").toString("base64url"),
+    ).toBe(encodedAttemptToken);
   });
 
   it("isolates otherwise identical opaque subjects by purpose and version", async () => {
@@ -1344,6 +1492,8 @@ describe("OpaqueProgressiveCooldownController", () => {
         scope,
         idempotencyKey: token(1),
         reservationId: `fbr1.${"A".repeat(21)}B`,
+        attemptGeneration: 1,
+        attemptToken: attemptToken(1),
       }),
     ).rejects.toMatchObject({
       code: "invalid-reservation-id",
@@ -1469,10 +1619,87 @@ describe("OpaqueProgressiveCooldownController", () => {
         idempotencyKey: token(1),
       }),
     ).resolves.toMatchObject({
-      status: "reserved",
-      replayed: true,
+      status: "attempt-pending",
       reservationId: RESERVATION_IDS[0],
     });
+  });
+
+  it("recovers an ambiguous begin-write CAS without reopening release authority", async () => {
+    let state: ProgressiveCooldownState | undefined;
+    let revision = 0;
+    let holdNextWrite = false;
+    let releaseWrite: (() => void) | undefined;
+    let markWriteStarted: (() => void) | undefined;
+    const writeStarted = new Promise<void>((resolve) => {
+      markWriteStarted = resolve;
+    });
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const store: ProgressiveCooldownStore = {
+      read: async () => state
+        ? { revision: String(revision), state: cloneState(state) }
+        : null,
+      compareAndSwap: async (input) => {
+        if (holdNextWrite) {
+          holdNextWrite = false;
+          markWriteStarted?.();
+          await writeGate;
+        }
+        if ((state === undefined ? null : String(revision)) !== input.expectedRevision) {
+          return { applied: false };
+        }
+        state = cloneState(input.state);
+        revision += 1;
+        return { applied: true, revision: String(revision) };
+      },
+    };
+    const testHarness = harness({ store });
+    const reserved = await testHarness.controller.reserve({
+      scope,
+      idempotencyKey: token(1),
+    });
+    if (reserved.status !== "reserved") {
+      throw new Error("expected reservation owner");
+    }
+
+    holdNextWrite = true;
+    const cancellation = new AbortController();
+    const pendingBegin = testHarness.controller.beginImmutableWrite({
+      scope,
+      idempotencyKey: token(1),
+      reservationId: reserved.reservationId,
+      attemptGeneration: reserved.attemptGeneration,
+      attemptToken: reserved.attemptToken,
+      signal: cancellation.signal,
+    });
+    await writeStarted;
+    cancellation.abort();
+    await expect(pendingBegin).resolves.toMatchObject({ status: "unavailable" });
+
+    releaseWrite?.();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    await expect(testHarness.controller.reserve({
+      scope,
+      idempotencyKey: token(1),
+    })).resolves.toMatchObject({ status: "pending-reconciliation" });
+    await expect(testHarness.controller.beginImmutableWrite({
+      scope,
+      idempotencyKey: token(1),
+      reservationId: reserved.reservationId,
+      attemptGeneration: reserved.attemptGeneration,
+      attemptToken: reserved.attemptToken,
+    })).resolves.toMatchObject({ status: "write-started", replayed: true });
+    await expect(testHarness.controller.release({
+      scope,
+      idempotencyKey: token(1),
+      reservationId: reserved.reservationId,
+      attemptGeneration: reserved.attemptGeneration,
+      attemptToken: reserved.attemptToken,
+    })).resolves.toMatchObject({ status: "write-in-progress" });
   });
 
   it("fails closed when compare-and-swap is unavailable", async () => {
@@ -1574,6 +1801,8 @@ describe("OpaqueProgressiveCooldownController", () => {
         scope,
         idempotencyKey: token(1),
         reservationId: reserved.reservationId,
+        attemptGeneration: reserved.attemptGeneration,
+        attemptToken: reserved.attemptToken,
       }),
     ).toEqual({
       status: "unavailable",
@@ -1648,6 +1877,8 @@ describe("OpaqueProgressiveCooldownController", () => {
       scope,
       idempotencyKey: token(1),
       reservationId: RESERVATION_IDS[0],
+      attemptGeneration: 1,
+      attemptToken: attemptToken(1),
     });
     expect(missing).toEqual({ status: "reservation-not-found" });
 
@@ -1663,6 +1894,8 @@ describe("OpaqueProgressiveCooldownController", () => {
         scope,
         idempotencyKey: token(2),
         reservationId: reserved.reservationId,
+        attemptGeneration: reserved.attemptGeneration,
+        attemptToken: reserved.attemptToken,
       }),
     ).toEqual({ status: "reservation-mismatch" });
   });
@@ -1730,6 +1963,17 @@ describe("OpaqueProgressiveCooldownController", () => {
     });
     expect(
       await badId.reserve({ scope, idempotencyKey: token(1) }),
+    ).toMatchObject({ status: "unavailable" });
+
+    const badAttempt = new OpaqueProgressiveCooldownController({
+      store: new AtomicMemoryStore(),
+      acceptanceVerifier,
+      clock: { nowMs: () => START },
+      reservationIdFactory: () => RESERVATION_IDS[0],
+      attemptTokenFactory: () => SUBJECT,
+    });
+    expect(
+      await badAttempt.reserve({ scope, idempotencyKey: token(1) }),
     ).toMatchObject({ status: "unavailable" });
   });
 

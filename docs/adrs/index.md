@@ -9,3 +9,4 @@
 - [ADR-0007: Bound OAuth Popup Opener Policy Overrides](./adr-0007-oauth-popup-opener-policy.md)
 - [ADR-0008: Use Opaque Compare-and-Swap Reservations for Progressive Cooldowns](./adr-0008-opaque-progressive-cooldown-reservations.md)
 - [ADR-0009: Exact-main OIDC package publishing](./adr-0009-exact-main-oidc-package-publishing.md)
+- [ADR-0010: Admit Immutable Writes with Owner-Bound Reservation Attempts](./adr-0010-owner-bound-immutable-write-admission.md)

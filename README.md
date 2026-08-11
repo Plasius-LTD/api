@@ -65,7 +65,8 @@ applyBaselineSecurityHeaders(headers, {
 
 `OpaqueProgressiveCooldownController` coordinates an immutable submission store
 with a separately authorised anti-abuse control store. It provides atomic
-reservation, acceptance-gated commit, release, idempotent replay, bounded
+reservation, owner-bound immutable-write admission, acceptance-gated commit,
+release, idempotent replay, bounded
 reconciliation, exact `Retry-After`, and a default 5m → 15m → 1h → 6h → 24h
 cooldown ladder that resets after 48 quiet hours.
 
@@ -120,7 +121,38 @@ const reservation = await cooldowns.reserve({
   },
   idempotencyKey,
 });
+
+if (reservation.status === "reserved") {
+  const writeAdmission = await cooldowns.beginImmutableWrite({
+    scope: {
+      purpose: "submission.bug",
+      version: "v1",
+      opaqueSubjectKey: purposeScopedKeyedPseudonym,
+    },
+    idempotencyKey,
+    reservationId: reservation.reservationId,
+    attemptGeneration: reservation.attemptGeneration,
+    attemptToken: reservation.attemptToken,
+  });
+
+  if (writeAdmission.status === "write-started") {
+    // Invoke conditional immutable storage only from this branch.
+  }
+}
 ```
+
+The raw `attemptToken` is one-use control authority returned only to the
+invocation that creates a reservation. Same-key replays receive
+`attempt-pending` or `pending-reconciliation` and never receive write or release
+authority. The control store retains only a domain-separated digest and the
+generation. Consumers must keep the raw token in request-local memory, redact it
+from exceptions and telemetry, and discard it when the invocation finishes.
+
+`beginImmutableWrite` is the mandatory final control-plane step before a Blob,
+database, or queue write. It atomically changes `reserved` to `writing`.
+`release` requires the matching owner generation/token and succeeds only while
+the record is still `reserved`; once writing begins, an ambiguous provider
+outcome remains reconciliation-only and cannot be released by another request.
 
 Consumers must:
 
@@ -133,6 +165,10 @@ Consumers must:
   every store and verifier call;
 - verify immutable acceptance from an identifier-isolated control/outbox
   projection before commit;
+- call `beginImmutableWrite` only after every fallible validation and packet
+  construction step, and invoke immutable storage only after `write-started`;
+- never place attempt tokens in packets, outboxes, logs, traces, analytics,
+  Admin, MCP, or exception text;
 - treat state keys and reservation records as pseudonymous personal data;
 - begin live deletion no later than
   `hardDeleteByMs - PROGRESSIVE_COOLDOWN_PURGE_SAFETY_MS`;
@@ -144,7 +180,9 @@ Consumers must:
 Store/verifier outages and corrupt state fail closed with a bounded, non-reflective
 `unavailable` result. Only explicit revision conflicts are retried. See the
 [design](./docs/design/opaque-progressive-cooldown.md) and
-[ADR-0008](./docs/adrs/adr-0008-opaque-progressive-cooldown-reservations.md).
+[ADR-0008](./docs/adrs/adr-0008-opaque-progressive-cooldown-reservations.md),
+as tightened by
+[ADR-0010](./docs/adrs/adr-0010-owner-bound-immutable-write-admission.md).
 Persisted leases, cooldowns, six-day default reconciliation retention, and the
 following fixed 24-hour deletion/backup safety window are exact: shorter,
 longer, overflowing, non-canonical, future-event, or temporally regressive
