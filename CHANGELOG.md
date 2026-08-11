@@ -21,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
     from bypassing the progressive cooldown ladder.
 
 - **Security**
+  - Updated the development-tool dependency graph to patched
+    `brace-expansion` and `nanoid` releases after the feedback release audit.
   - Moved pull-request validation to GitHub-hosted runners while retaining
     fail-closed same-repository admission and workflow-restricted self-hosted
     execution for protected `main`.
