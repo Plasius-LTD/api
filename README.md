@@ -10,13 +10,13 @@
 
 Public generic API helper package.
 
-
 ## What this package contains
 
 - Public helper exports compiled to `dist/**`
 - Reusable transport-security helper utilities
 - Reusable session helper utilities compatible with `withSession` middleware
 - Reusable generic parameter-validation middleware for request ingress checks
+- Reusable opaque progressive-cooldown and immutable-acceptance reservation controls
 - Governance/legal materials (`docs/**`, `legal/**`)
 
 ## Package Boundary (Public by Design)
@@ -61,6 +61,78 @@ applyBaselineSecurityHeaders(headers, {
   - `withValidatedParam({ paramName, validate, contextKey? })`
 - Consumers keep validation policy local by supplying their own validator and normalized value contract.
 
+## Opaque progressive cooldowns
+
+`OpaqueProgressiveCooldownController` coordinates an immutable submission store
+with a separately authorised anti-abuse control store. It provides atomic
+reservation, acceptance-gated commit, release, idempotent replay, bounded
+reconciliation, exact `Retry-After`, and a default 5m → 15m → 1h → 6h → 24h
+cooldown ladder that resets after 48 quiet hours.
+
+The controller accepts only an already purpose/version-scoped 256-bit keyed
+pseudonym encoded as unpadded base64url. Never pass an account ID, email address,
+IP address, bearer token, cookie, user agent, or device fingerprint. The package
+derives a second purpose-isolated state digest before calling the store. Store
+keys use the canonical `fbs1.<43-character base64url>` wire form and reservation
+IDs use canonical 128-bit `fbr1.<22-character base64url>` values so adapters can
+persist the shared entity-manager aggregate without translation. The package
+never logs control input or dependency errors.
+
+```ts
+import {
+  OpaqueProgressiveCooldownController,
+  type ImmutableAcceptanceVerifier,
+  type ProgressiveCooldownStore,
+} from "@plasius/api/progressive-cooldown";
+
+declare const store: ProgressiveCooldownStore;
+declare const acceptanceVerifier: ImmutableAcceptanceVerifier;
+
+const cooldowns = new OpaqueProgressiveCooldownController({
+  store,
+  acceptanceVerifier,
+});
+
+const reservation = await cooldowns.reserve({
+  scope: {
+    purpose: "submission.bug",
+    version: "v1",
+    opaqueSubjectKey: purposeScopedKeyedPseudonym,
+  },
+  idempotencyKey,
+});
+```
+
+Consumers must:
+
+- evaluate their remotely controlled Feature flag before creating reservations;
+- derive opaque subjects with a secret-keyed, purpose/version-scoped function
+  outside this package;
+- implement atomic compare-and-swap with bounded deadlines;
+- return a new revision for every successful update;
+- honour the controller-provided abort signal and total operation deadline in
+  every store and verifier call;
+- verify immutable acceptance from an identifier-isolated control/outbox
+  projection before commit;
+- treat state keys and reservation records as pseudonymous personal data;
+- begin live deletion no later than
+  `hardDeleteByMs - PROGRESSIVE_COOLDOWN_PURGE_SAFETY_MS`;
+- ensure live data, soft-deleted copies, and backups are absent by
+  `hardDeleteByMs`;
+- exclude state, revisions, keys, and dependency exceptions from logs,
+  analytics, Admin, MCP, and content storage.
+
+Store/verifier outages and corrupt state fail closed with a bounded, non-reflective
+`unavailable` result. Only explicit revision conflicts are retried. See the
+[design](./docs/design/opaque-progressive-cooldown.md) and
+[ADR-0008](./docs/adrs/adr-0008-opaque-progressive-cooldown-reservations.md).
+Persisted leases, cooldowns, six-day default reconciliation retention, and the
+following fixed 24-hour deletion/backup safety window are exact: shorter,
+longer, overflowing, non-canonical, future-event, or temporally regressive
+values are rejected. When the injected clock itself is invalid,
+`retryAfterSeconds` remains available but `retryAtMs` is intentionally omitted
+because no truthful absolute timestamp can be produced.
+
 ## API Error Localization
 
 - Exports package-owned `en-GB` error translations through `apiEnGbTranslations`.
@@ -68,10 +140,7 @@ applyBaselineSecurityHeaders(headers, {
 - Text-body middleware responses keep their existing default English body and expose the key through the `x-plasius-error-key` response header.
 
 ```ts
-import {
-  apiErrorTranslationKeys,
-  createApiErrorResponse,
-} from "@plasius/api";
+import { apiErrorTranslationKeys, createApiErrorResponse } from "@plasius/api";
 
 const response = createApiErrorResponse(404, apiErrorTranslationKeys.notFound);
 ```
@@ -96,6 +165,7 @@ npm install @plasius/api
 
 - Main module: `@plasius/api`
 - Middleware module: `@plasius/api/middleware`
+- Progressive cooldown module: `@plasius/api/progressive-cooldown`
 
 ### Example
 
@@ -108,7 +178,11 @@ import {
 ```
 
 ```ts
-import { withCors, withRateLimiting, withMiddleware } from "@plasius/api/middleware";
+import {
+  withCors,
+  withRateLimiting,
+  withMiddleware,
+} from "@plasius/api/middleware";
 ```
 
 ```ts
@@ -138,12 +212,15 @@ npm run pack:check
 
 1. Update `CHANGELOG.md` under `Unreleased`.
 2. Run `npm ci && npm run clean && npm run build && npm test && npm run pack:check`.
-3. Bind the npm trusted publisher for `@plasius/api` to repository
+3. Open and merge the reviewed change through the protected branch workflow.
+4. Bind the npm trusted publisher for `@plasius/api` to repository
    `Plasius-LTD/api`, workflow `cd.yml`, environment `production`, and the
    `npm publish` action.
-4. Dispatch `cd.yml` from protected `main` with `phase: prepare`. It owns
+5. Dispatch `cd.yml` from protected `main` with `phase: prepare`. It owns
    versioning, the release pull request, exact-SHA CI admission, tagging, and
    tokenless publication through the `production` environment.
+6. Verify the protected environment, tag, provenance, npm result, and post-release
+   CI.
 
 Publication uses Node 24.18.0 LTS. Do not publish from a local machine or
 configure a long-lived npm token.

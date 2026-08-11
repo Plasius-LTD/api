@@ -45,3 +45,4 @@ export {
 } from "./utils/error-messages.js";
 export { apiEnGbTranslations } from "./translations/en-GB.js";
 export * from "./utils/http.errors.js";
+export * from "./controls/progressiveCooldown.js";
