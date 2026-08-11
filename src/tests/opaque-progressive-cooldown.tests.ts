@@ -2,10 +2,13 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PROGRESSIVE_COOLDOWN_POLICY,
+  DEFAULT_PROGRESSIVE_COOLDOWN_POLICY_ATTESTATION,
   MAX_PROGRESSIVE_COOLDOWN_MS,
   OpaqueProgressiveCooldownController,
   PROGRESSIVE_COOLDOWN_PURGE_SAFETY_MS,
   ProgressiveCooldownInputError,
+  attestProgressiveCooldownPolicy,
+  isProgressiveCooldownPolicyAttestation,
   type ImmutableAcceptanceVerifier,
   type ProgressiveCooldownReservationRecord,
   type ProgressiveCooldownSnapshot,
@@ -217,6 +220,81 @@ describe("OpaqueProgressiveCooldownController", () => {
     ).toBe(6 * DAY);
     expect(MAX_PROGRESSIVE_COOLDOWN_MS).toBe(DAY);
     expect(PROGRESSIVE_COOLDOWN_PURGE_SAFETY_MS).toBe(DAY);
+  });
+
+  it("attests the exact resolved policy without exposing mutable state", () => {
+    const defaultHarness = harness();
+    const defaultAttestation = attestProgressiveCooldownPolicy();
+    const customAttestation = attestProgressiveCooldownPolicy({
+      cooldownLadderMs: [10 * MINUTE],
+    });
+
+    expect(defaultAttestation).toEqual(
+      DEFAULT_PROGRESSIVE_COOLDOWN_POLICY_ATTESTATION,
+    );
+    expect(defaultHarness.controller.policyAttestation).toEqual(
+      DEFAULT_PROGRESSIVE_COOLDOWN_POLICY_ATTESTATION,
+    );
+    expect(
+      Reflect.set(
+        defaultHarness.controller,
+        "policyAttestation",
+        customAttestation,
+      ),
+    ).toBe(false);
+    expect(defaultAttestation.fingerprint).toMatch(
+      /^pcp1\.[A-Za-z0-9_-]{43}$/u,
+    );
+    expect(defaultAttestation.fingerprint).toBe(
+      "pcp1.kedBLkZvRIhieh209uVojdRBsz9hl4Hqo3ofjC0jkDM",
+    );
+    expect(customAttestation.fingerprint).not.toBe(
+      defaultAttestation.fingerprint,
+    );
+    expect(customAttestation.policy.cooldownLadderMs).toEqual([10 * MINUTE]);
+    expect(Object.isFrozen(defaultAttestation)).toBe(true);
+    expect(Object.isFrozen(defaultAttestation.policy)).toBe(true);
+    expect(Object.isFrozen(defaultAttestation.policy.cooldownLadderMs)).toBe(
+      true,
+    );
+    expect(isProgressiveCooldownPolicyAttestation(defaultAttestation)).toBe(
+      true,
+    );
+    expect(
+      isProgressiveCooldownPolicyAttestation({
+        ...defaultAttestation,
+        policy: customAttestation.policy,
+      }),
+    ).toBe(false);
+    expect(
+      isProgressiveCooldownPolicyAttestation({
+        ...defaultAttestation,
+        unexpected: true,
+      }),
+    ).toBe(false);
+    expect(
+      isProgressiveCooldownPolicyAttestation({
+        fingerprint: defaultAttestation.fingerprint,
+        policy: {
+          operationTimeoutMs: defaultAttestation.policy.operationTimeoutMs,
+          maxRevisionConflicts:
+            defaultAttestation.policy.maxRevisionConflicts,
+          maxReservationRecords:
+            defaultAttestation.policy.maxReservationRecords,
+          reconciliationRetentionMs:
+            defaultAttestation.policy.reconciliationRetentionMs,
+          unavailableRetryAfterMs:
+            defaultAttestation.policy.unavailableRetryAfterMs,
+          reservationLeaseMs:
+            defaultAttestation.policy.reservationLeaseMs,
+          resetAfterMs: defaultAttestation.policy.resetAfterMs,
+          cooldownLadderMs: [
+            ...defaultAttestation.policy.cooldownLadderMs,
+          ],
+        },
+        schemaVersion: "1",
+      }),
+    ).toBe(true);
   });
 
   it("reserves once and reports the exact active-lease retry", async () => {

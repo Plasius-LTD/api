@@ -43,6 +43,15 @@ The controller exposes:
 3. `commitAccepted` after the verifier confirms immutable acceptance;
 4. `release` when no immutable packet was accepted.
 
+It also exposes an immutable `policyAttestation` with a versioned deterministic
+SHA-256 fingerprint over every resolved policy field. This is a compatibility
+fingerprint, not a signature. Consumers that persist their own reconciliation
+records must obtain it from the configured controller, validate it with
+`isProgressiveCooldownPolicyAttestation`, pin an explicitly supported
+fingerprint, and derive record horizons and fallback retries from the included
+policy snapshot. This prevents independently duplicated policy constants from
+silently diverging while preserving valid custom policies for generic users.
+
 `commitAccepted` and `release` are replay safe. Reconciliation workers use the
 same `commitAccepted` operation with the reservation details held in their
 identifier-isolated outbox. A released reservation may later be promoted to
@@ -160,6 +169,8 @@ a successful update that reuses its expected revision all fail closed.
 Tests cover:
 
 - the exact default ladder, cap, and 48-hour reset;
+- immutable exact-policy attestations, custom-policy fingerprints, tamper
+  rejection, reordered legitimate serialized objects, and public exports;
 - exact and rounded-up retry timing;
 - concurrent reservations and commits;
 - idempotent reserve, commit, and release;

@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Added**
   - Added storage-agnostic opaque progressive-cooldown controls with atomic compare-and-swap reservations, immutable-acceptance verification, idempotent commit/release, bounded reconciliation and dependency deadlines, caller cancellation, exact retry timing, deterministic runtime dependencies, monotonic commit timestamps, and the default 5m → 15m → 1h → 6h → 24h ladder.
   - Added the `@plasius/api/progressive-cooldown` public entrypoint and control-store contracts.
+  - Added immutable, versioned progressive-cooldown policy attestations with a
+    deterministic public fingerprint for consumers whose durable records are
+    coupled to the controller's resolved timing policy.
 
 - **Changed**
   - Split release preparation from SHA-bound publication so npm provenance,
@@ -33,6 +36,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - Separated the default six-day live reconciliation period from a fixed final
     24-hour deletion/backup safety window so stores begin deletion only after
     reconciliation closes while still proving total removal within seven days.
+  - Enabled consumers to reject mismatched cooldown-policy composition before
+    durable I/O and derive reconciliation horizons from the exact attested
+    controller policy instead of duplicated constants.
 
 ## [1.0.21] - 2026-07-28
 

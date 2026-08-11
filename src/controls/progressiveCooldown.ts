@@ -20,6 +20,17 @@ export interface ProgressiveCooldownPolicy {
   readonly operationTimeoutMs: number;
 }
 
+/**
+ * Immutable proof of the exact policy resolved by a progressive-cooldown
+ * controller. Consumers that couple durable records to policy timing can pin
+ * this fingerprint and derive every related horizon from the attested policy.
+ */
+export interface ProgressiveCooldownPolicyAttestation {
+  readonly schemaVersion: "1";
+  readonly fingerprint: string;
+  readonly policy: ProgressiveCooldownPolicy;
+}
+
 export const DEFAULT_PROGRESSIVE_COOLDOWN_POLICY: ProgressiveCooldownPolicy =
   Object.freeze({
     cooldownLadderMs: Object.freeze([
@@ -355,6 +366,12 @@ const POLICY_KEYS = new Set([
   "maxRevisionConflicts",
   "operationTimeoutMs",
 ]);
+const POLICY_ATTESTATION_KEYS = new Set([
+  "schemaVersion",
+  "fingerprint",
+  "policy",
+]);
+const POLICY_FINGERPRINT_PATTERN = /^pcp1\.[A-Za-z0-9_-]{43}$/u;
 const APPLIED_COMPARE_AND_SWAP_KEYS = new Set(["applied", "revision"]);
 const CONFLICT_COMPARE_AND_SWAP_KEYS = new Set(["applied"]);
 
@@ -463,6 +480,7 @@ export class OpaqueProgressiveCooldownController {
   readonly #clock: ProgressiveCooldownClock;
   readonly #reservationIdFactory: () => string;
   readonly #policy: ProgressiveCooldownPolicy;
+  readonly #policyAttestation: ProgressiveCooldownPolicyAttestation;
 
   constructor(options: OpaqueProgressiveCooldownControllerOptions) {
     if (
@@ -479,12 +497,19 @@ export class OpaqueProgressiveCooldownController {
     } catch {
       throw new ProgressiveCooldownInputError("invalid-policy");
     }
+    this.#policyAttestation = attestResolvedProgressiveCooldownPolicy(
+      this.#policy,
+    );
     this.#store = options.store;
     this.#acceptanceVerifier = options.acceptanceVerifier;
     this.#clock = options.clock ?? { nowMs: () => Date.now() };
     this.#reservationIdFactory =
       options.reservationIdFactory ??
       (() => `fbr1.${randomBytes(16).toString("base64url")}`);
+  }
+
+  get policyAttestation(): ProgressiveCooldownPolicyAttestation {
+    return this.#policyAttestation;
   }
 
   async getEligibility(
@@ -1189,6 +1214,85 @@ function resolvePolicy(
     cooldownLadderMs: Object.freeze(ladder),
   });
 }
+
+function fingerprintProgressiveCooldownPolicy(
+  policy: ProgressiveCooldownPolicy,
+): string {
+  const canonicalPolicy = JSON.stringify([
+    1,
+    policy.cooldownLadderMs,
+    policy.resetAfterMs,
+    policy.reservationLeaseMs,
+    policy.unavailableRetryAfterMs,
+    policy.reconciliationRetentionMs,
+    policy.maxReservationRecords,
+    policy.maxRevisionConflicts,
+    policy.operationTimeoutMs,
+  ]);
+  return `pcp1.${createHash("sha256")
+    .update("opaque-progressive-cooldown-policy:v1", "utf8")
+    .update("\0", "utf8")
+    .update(canonicalPolicy, "utf8")
+    .digest("base64url")}`;
+}
+
+function attestResolvedProgressiveCooldownPolicy(
+  policy: ProgressiveCooldownPolicy,
+): ProgressiveCooldownPolicyAttestation {
+  const policySnapshot: ProgressiveCooldownPolicy = Object.freeze({
+    ...policy,
+    cooldownLadderMs: Object.freeze([...policy.cooldownLadderMs]),
+  });
+  return Object.freeze({
+    schemaVersion: "1",
+    fingerprint: fingerprintProgressiveCooldownPolicy(policySnapshot),
+    policy: policySnapshot,
+  });
+}
+
+/**
+ * Resolve, validate, snapshot, and attest a progressive-cooldown policy.
+ */
+export function attestProgressiveCooldownPolicy(
+  policy?: Partial<ProgressiveCooldownPolicy>,
+): ProgressiveCooldownPolicyAttestation {
+  return attestResolvedProgressiveCooldownPolicy(resolvePolicy(policy));
+}
+
+/**
+ * Validate a serialized policy attestation, including its exact key set and
+ * fingerprint. This never trusts a caller-provided fingerprint on its own.
+ */
+export function isProgressiveCooldownPolicyAttestation(
+  input: unknown,
+): input is ProgressiveCooldownPolicyAttestation {
+  if (
+    !isPlainObject(input) ||
+    !hasOnlyKeys(input, POLICY_ATTESTATION_KEYS) ||
+    !hasOwnKeys(input, POLICY_ATTESTATION_KEYS) ||
+    input.schemaVersion !== "1" ||
+    typeof input.fingerprint !== "string" ||
+    !POLICY_FINGERPRINT_PATTERN.test(input.fingerprint) ||
+    !isPlainObject(input.policy) ||
+    !hasOnlyKeys(input.policy, POLICY_KEYS) ||
+    !hasOwnKeys(input.policy, POLICY_KEYS)
+  ) {
+    return false;
+  }
+
+  try {
+    const resolved = resolvePolicy(
+      input.policy as unknown as ProgressiveCooldownPolicy,
+    );
+    const expected = attestResolvedProgressiveCooldownPolicy(resolved);
+    return expected.fingerprint === input.fingerprint;
+  } catch {
+    return false;
+  }
+}
+
+export const DEFAULT_PROGRESSIVE_COOLDOWN_POLICY_ATTESTATION =
+  attestProgressiveCooldownPolicy();
 
 function isDuration(value: number, minimum: number, maximum: number): boolean {
   return Number.isSafeInteger(value) && value >= minimum && value <= maximum;

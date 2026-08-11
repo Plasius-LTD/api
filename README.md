@@ -78,9 +78,20 @@ IDs use canonical 128-bit `fbr1.<22-character base64url>` values so adapters can
 persist the shared entity-manager aggregate without translation. The package
 never logs control input or dependency errors.
 
+Every controller also exposes an immutable `policyAttestation`. Its
+`pcp1.<sha256>` fingerprint deterministically covers the exact resolved timing,
+capacity, retry, and reconciliation policy. A consumer whose own durable record
+shape depends on those values must validate and pin the expected fingerprint,
+then derive its horizons from `policyAttestation.policy`; it must not duplicate
+policy constants. The fingerprint is a public compatibility identifier, not a
+signature or secret. Trust still comes from receiving the attestation directly
+from the configured controller dependency.
+
 ```ts
 import {
+  DEFAULT_PROGRESSIVE_COOLDOWN_POLICY_ATTESTATION,
   OpaqueProgressiveCooldownController,
+  isProgressiveCooldownPolicyAttestation,
   type ImmutableAcceptanceVerifier,
   type ProgressiveCooldownStore,
 } from "@plasius/api/progressive-cooldown";
@@ -92,6 +103,14 @@ const cooldowns = new OpaqueProgressiveCooldownController({
   store,
   acceptanceVerifier,
 });
+
+if (
+  !isProgressiveCooldownPolicyAttestation(cooldowns.policyAttestation) ||
+  cooldowns.policyAttestation.fingerprint !==
+    DEFAULT_PROGRESSIVE_COOLDOWN_POLICY_ATTESTATION.fingerprint
+) {
+  throw new Error("Unsupported progressive-cooldown policy.");
+}
 
 const reservation = await cooldowns.reserve({
   scope: {
