@@ -7,7 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 - **Added**
-  - (placeholder)
+  - Added storage-agnostic opaque progressive-cooldown controls with atomic compare-and-swap reservations, immutable-acceptance verification, idempotent commit/release, bounded reconciliation and dependency deadlines, caller cancellation, exact retry timing, deterministic runtime dependencies, monotonic commit timestamps, and the default 5m → 15m → 1h → 6h → 24h ladder.
+  - Added the `@plasius/api/progressive-cooldown` public entrypoint and control-store contracts.
 
 - **Changed**
   - Split release preparation from SHA-bound publication so npm provenance,
@@ -15,15 +16,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
     same immutable commit.
 
 - **Fixed**
-  - (placeholder)
+  - Rejected persisted zero-streak snapshots that retain an accepted commit
+    inside the 48-hour quiet-reset window, preventing a malformed control state
+    from bypassing the progressive cooldown ladder.
 
 - **Security**
+  - Updated the development-tool dependency graph to patched
+    `brace-expansion` and `nanoid` releases after the feedback release audit.
   - Moved pull-request validation to GitHub-hosted runners while retaining
     fail-closed same-repository admission and workflow-restricted self-hosted
     execution for protected `main`.
   - Removed long-lived npm write-token configuration in favour of
     workflow-bound OIDC trusted publishing, with dependency execution isolated
     from the privileged production publication job.
+  - Restricted cooldown ingress to purpose/version-scoped 256-bit opaque subjects and random idempotency values, emitted canonical `fbs1` state keys and `fbr1` reservation IDs, persisted only second-order digests, enforced exact non-extendable temporal/deletion invariants, rejected clock arithmetic overflow and non-fresh CAS revisions, suppressed dependency details, and made store/verifier/corrupt-state failures fail closed.
+  - Separated the default six-day live reconciliation period from a fixed final
+    24-hour deletion/backup safety window so stores begin deletion only after
+    reconciliation closes while still proving total removal within seven days.
 
 ## [1.0.21] - 2026-07-28
 
