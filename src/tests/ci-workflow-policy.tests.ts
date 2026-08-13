@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const read = (path: string): string =>
@@ -8,6 +10,9 @@ const ciWorkflow = read(".github/workflows/ci.yml");
 const cdWorkflow = read(".github/workflows/cd.yml");
 const releasePrepareWorkflow = read(".github/workflows/release-prepare.yml");
 const npmConfig = read(".npmrc");
+const releasePreidScript = fileURLToPath(
+  new URL("../../scripts/derive-release-preid.cjs", import.meta.url),
+);
 
 describe("release workflow trust boundaries", () => {
   it("runs pull-request validation only for same-repository heads", () => {
@@ -99,5 +104,31 @@ describe("release workflow trust boundaries", () => {
     );
     expect(releasePrepareWorkflow).not.toContain("--force-with-lease");
     expect(releasePrepareWorkflow).not.toContain("secrets: inherit");
+  });
+
+  it("derives release pre-identities through one executable parser", () => {
+    expect(releasePrepareWorkflow).toContain(
+      'node scripts/derive-release-preid.cjs "${MAIN_VERSION}"',
+    );
+    expect(cdWorkflow.match(/node scripts\/derive-release-preid\.cjs/gu)).toHaveLength(2);
+
+    for (const [version, expected] of [
+      ["1.1.0", ""],
+      ["1.1.0+build.7", ""],
+      ["1.1.0-beta", "beta"],
+      ["1.1.0-beta.3", "beta"],
+      ["1.1.0-beta.preview", "beta.preview"],
+    ]) {
+      expect(execFileSync(process.execPath, [releasePreidScript, version], {
+        encoding: "utf8",
+      })).toBe(expected);
+    }
+
+    const invalid = spawnSync(process.execPath, [releasePreidScript, "not-semver"], {
+      encoding: "utf8",
+    });
+    expect(invalid.status).toBe(1);
+    expect(invalid.stdout).toBe("");
+    expect(invalid.stderr).toBe("Cannot derive pre-release identity.\n");
   });
 });
