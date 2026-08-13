@@ -7,6 +7,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 - **Added**
+  - (placeholder)
+
+- **Changed**
+  - (placeholder)
+
+- **Fixed**
+  - (placeholder)
+
+- **Security**
+  - (placeholder)
+
+## [1.2.0] - 2026-08-13
+
+- **Added**
   - Added identifier-isolated immutable-acceptance reconciliation by canonical
     state key and reservation ID, allowing bounded outbox workers to converge
     cooldown state without retaining an opaque subject, scope, idempotency key,
@@ -372,7 +386,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Initial public release scaffold for `@plasius/api`.
 
-[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.2.0...HEAD
 [1.0.0]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.0
 [1.0.1]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.1
 [1.0.2]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.2
@@ -393,3 +407,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [1.0.21]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.21
 [1.1.0]: https://github.com/Plasius-LTD/api/releases/tag/v1.1.0
 [1.1.1]: https://github.com/Plasius-LTD/api/releases/tag/v1.1.1
+[1.2.0]: https://github.com/Plasius-LTD/api/releases/tag/v1.2.0
