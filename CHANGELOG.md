@@ -13,7 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - (placeholder)
 
 - **Fixed**
-  - (placeholder)
+  - Replaced duplicated inline release-version evaluators with one tested,
+    fail-closed parser so release preparation and immutable publication derive
+    stable and prerelease distribution tags identically.
 
 - **Security**
   - (placeholder)

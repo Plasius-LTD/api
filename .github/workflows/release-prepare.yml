@@ -454,19 +454,7 @@ jobs:
             FLAGS="--access public"
           fi
 
-          EFFECTIVE_PREID=$(TARGET_VER="${MAIN_VERSION}" node -e '
-          const version = process.env.TARGET_VER || "";
-          const match = version.match(/^[0-9]+\.[0-9]+\.[0-9]+(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/);
-          if (!match) {
-            console.error(`Cannot derive pre-release identity from invalid version ${version}.`);
-            process.exit(1);
-          fi
-          const identifiers = match[1] ? match[1].split(".") : [];
-          if (identifiers.length > 1 && /^[0-9]+$/.test(identifiers.at(-1))) {
-            identifiers.pop();
-          }
-          process.stdout.write(identifiers.join("."));
-          ')
+          EFFECTIVE_PREID="$(node scripts/derive-release-preid.cjs "${MAIN_VERSION}")"
 
           if [ -n "${PREID:-}" ] && [ "${PREID}" != "${EFFECTIVE_PREID}" ]; then
             echo "Requested pre-release identity ${PREID} does not match the pre-release identity ${EFFECTIVE_PREID:-<stable>} derived from ${MAIN_VERSION}." >&2
