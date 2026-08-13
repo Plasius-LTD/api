@@ -56,7 +56,9 @@ export type ProgressiveCooldownInputErrorCode =
   | "invalid-opaque-subject"
   | "invalid-policy"
   | "invalid-purpose"
+  | "invalid-reconciliation-command"
   | "invalid-reservation-id"
+  | "invalid-state-key"
   | "invalid-version";
 
 export class ProgressiveCooldownInputError extends Error {
@@ -210,6 +212,16 @@ export interface ProgressiveCooldownOwnedTransitionCommand
   readonly attemptToken: string;
 }
 
+/**
+ * Identifier-isolated command for a reconciliation worker. It deliberately
+ * excludes subject, scope, idempotency, packet, and write-authority inputs.
+ */
+export interface ProgressiveCooldownOpaqueReconcileCommand {
+  readonly stateKey: string;
+  readonly reservationId: string;
+  readonly signal?: AbortSignal;
+}
+
 export interface ProgressiveCooldownUnavailableResult {
   readonly status: "unavailable";
   /**
@@ -309,6 +321,13 @@ export interface ProgressiveCooldownAttemptMismatchResult {
   readonly status: "attempt-mismatch";
 }
 
+export interface ProgressiveCooldownExpiredResult {
+  readonly status: "expired";
+  readonly reservationId: string;
+  /** The stored reconciliation boundary, not the processor's observation time. */
+  readonly expiredAtMs: number;
+}
+
 export type ProgressiveCooldownReserveResult =
   | ProgressiveCooldownReservedResult
   | ProgressiveCooldownAttemptPendingResult
@@ -342,6 +361,13 @@ export type ProgressiveCooldownReleaseResult =
   | ProgressiveCooldownReservationMissingResult
   | ProgressiveCooldownReservationMismatchResult
   | ProgressiveCooldownAttemptMismatchResult
+  | ProgressiveCooldownUnavailableResult;
+
+export type ProgressiveCooldownReconcileResult =
+  | ProgressiveCooldownCommittedResult
+  | ProgressiveCooldownPendingResult
+  | ProgressiveCooldownExpiredResult
+  | ProgressiveCooldownReservationMissingResult
   | ProgressiveCooldownUnavailableResult;
 
 type MutableReservationRecord = {
@@ -437,6 +463,15 @@ const POLICY_ATTESTATION_KEYS = new Set([
 const POLICY_FINGERPRINT_PATTERN = /^pcp1\.[A-Za-z0-9_-]{43}$/u;
 const APPLIED_COMPARE_AND_SWAP_KEYS = new Set(["applied", "revision"]);
 const CONFLICT_COMPARE_AND_SWAP_KEYS = new Set(["applied"]);
+const RECONCILIATION_COMMAND_KEYS = new Set([
+  "stateKey",
+  "reservationId",
+  "signal",
+]);
+const REQUIRED_RECONCILIATION_COMMAND_KEYS = new Set([
+  "stateKey",
+  "reservationId",
+]);
 
 class OperationDeadline {
   readonly startedAtMs: number;
@@ -964,66 +999,100 @@ export class OpaqueProgressiveCooldownController {
           if (record.status === "committed") {
             return { result: committedResult(record, true) };
           }
-
-          const nextStreak = Math.min(
-            state.streak + 1,
-            this.#policy.cooldownLadderMs.length,
-          );
-          const cooldownDurationMs =
-            this.#policy.cooldownLadderMs[nextStreak - 1];
-          if (cooldownDurationMs === undefined) {
-            return { result: this.#unavailable(mutationNowMs) };
-          }
-          const cooldownUntilMs = addTimestamp(
-            mutationNowMs,
-            cooldownDurationMs,
-          );
-          const quietResetAtMs = addTimestamp(
-            mutationNowMs,
-            this.#policy.resetAfterMs,
-          );
-          const reconciliationUntilMs =
-            quietResetAtMs === null
-              ? null
-              : addTimestamp(
-                  quietResetAtMs,
-                  this.#policy.reconciliationRetentionMs,
-                );
-          if (
-            cooldownUntilMs === null ||
-            quietResetAtMs === null ||
-            reconciliationUntilMs === null ||
-            (state.lastCommittedAtMs !== undefined &&
-              mutationNowMs < state.lastCommittedAtMs)
-          ) {
-            return { result: this.#unavailable(mutationNowMs) };
-          }
-
-          record.status = "committed";
-          record.committedAtMs = mutationNowMs;
-          record.committedStreak = nextStreak;
-          record.cooldownDurationMs = cooldownDurationMs;
-          record.cooldownUntilMs = cooldownUntilMs;
-          record.reconciliationUntilMs = reconciliationUntilMs;
-          delete record.releasedAtMs;
-          state.streak = nextStreak;
-          state.lastCommittedAtMs = mutationNowMs;
-          state.cooldownUntilMs = cooldownUntilMs;
-          const hardDeleteByMs = calculateHardDeleteBy(
-            state,
-            mutationNowMs,
-            this.#policy,
-          );
-          if (hardDeleteByMs === null) {
-            return { result: this.#unavailable(mutationNowMs) };
-          }
-          state.hardDeleteByMs = hardDeleteByMs;
-
-          return {
-            state,
-            result: committedResult(record, false),
-          };
+          return this.#commitRecord(state, record, mutationNowMs);
         },
+      );
+    } finally {
+      operation.dispose();
+    }
+  }
+
+  async reconcileImmutableAcceptance(
+    command: ProgressiveCooldownOpaqueReconcileCommand,
+  ): Promise<ProgressiveCooldownReconcileResult> {
+    const validated = validateReconciliationCommand(command);
+    const { stateKey, reservationId, signal } = validated;
+    const nowMs = this.#getNow();
+    if (nowMs === null) {
+      return this.#unavailable(null);
+    }
+
+    const operation = createOperationDeadline(
+      nowMs,
+      this.#policy.operationTimeoutMs,
+      signal,
+    );
+    if (!operation) {
+      return this.#unavailable(null);
+    }
+    try {
+      const snapshot = await this.#read(stateKey, operation);
+      if (snapshot === "unavailable") {
+        return this.#unavailable(nowMs);
+      }
+      if (!snapshot) {
+        return { status: "reservation-not-found" };
+      }
+      const decisionNowMs = this.#getNow();
+      if (decisionNowMs === null) {
+        return this.#unavailable(null);
+      }
+      const existingRecord = snapshot.state.reservations.find(
+        (candidate) => candidate.reservationId === reservationId,
+      );
+      if (!existingRecord) {
+        return { status: "reservation-not-found" };
+      }
+      if (existingRecord.status === "committed") {
+        return committedResult({ ...existingRecord }, true);
+      }
+      if (existingRecord.reconciliationUntilMs <= decisionNowMs) {
+        return await this.#mutate<ProgressiveCooldownReconcileResult>(
+          stateKey,
+          nowMs,
+          operation,
+          (current, mutationNowMs) =>
+            this.#reconcileRecord(
+              current,
+              reservationId,
+              false,
+              mutationNowMs,
+            ),
+        );
+      }
+
+      let accepted: boolean;
+      try {
+        if (operation.signal.aborted) {
+          return this.#unavailable(nowMs);
+        }
+        accepted =
+          (await operation.wait(
+            this.#acceptanceVerifier.hasImmutableAcceptance({
+              stateKey,
+              reservationId,
+              signal: operation.signal,
+              deadlineAtMs: operation.deadlineAtMs,
+            }),
+          )) === true;
+      } catch {
+        return this.#unavailable(nowMs);
+      }
+      if (!accepted) {
+        return pendingReconciliationResult({ ...existingRecord });
+      }
+
+      return await this.#mutate<ProgressiveCooldownReconcileResult>(
+        stateKey,
+        nowMs,
+        operation,
+        (current, mutationNowMs) =>
+          this.#reconcileRecord(
+            current,
+            reservationId,
+            true,
+            mutationNowMs,
+          ),
       );
     } finally {
       operation.dispose();
@@ -1125,6 +1194,122 @@ export class OpaqueProgressiveCooldownController {
     } finally {
       operation.dispose();
     }
+  }
+
+  #reconcileRecord(
+    current: MutableState,
+    reservationId: string,
+    accepted: boolean,
+    mutationNowMs: number,
+  ): Mutation<ProgressiveCooldownReconcileResult> {
+    const currentRecord = current.reservations.find(
+      (candidate) => candidate.reservationId === reservationId,
+    );
+    if (!currentRecord) {
+      return { result: { status: "reservation-not-found" } };
+    }
+    if (currentRecord.status === "committed") {
+      return { result: committedResult(currentRecord, true) };
+    }
+    if (currentRecord.reconciliationUntilMs <= mutationNowMs) {
+      const expiredAtMs = currentRecord.reconciliationUntilMs;
+      const state = normalizeState(current, mutationNowMs, this.#policy);
+      if (!state) {
+        return { result: this.#unavailable(mutationNowMs) };
+      }
+      if (state.reservations.length === 0) {
+        state.hardDeleteByMs = mutationNowMs;
+      }
+      return {
+        state,
+        result: {
+          status: "expired",
+          reservationId,
+          expiredAtMs,
+        },
+      };
+    }
+    if (!accepted) {
+      return { result: pendingReconciliationResult(currentRecord) };
+    }
+    const state = normalizeState(current, mutationNowMs, this.#policy);
+    if (!state) {
+      return { result: this.#unavailable(mutationNowMs) };
+    }
+    const record = state.reservations.find(
+      (candidate) => candidate.reservationId === reservationId,
+    );
+    if (!record) {
+      return { result: { status: "reservation-not-found" } };
+    }
+    return this.#commitRecord(state, record, mutationNowMs);
+  }
+
+  #commitRecord(
+    state: MutableState,
+    record: MutableReservationRecord,
+    mutationNowMs: number,
+  ): Mutation<
+    ProgressiveCooldownCommittedResult | ProgressiveCooldownUnavailableResult
+  > {
+    const nextStreak = Math.min(
+      state.streak + 1,
+      this.#policy.cooldownLadderMs.length,
+    );
+    const cooldownDurationMs =
+      this.#policy.cooldownLadderMs[nextStreak - 1];
+    if (cooldownDurationMs === undefined) {
+      return { result: this.#unavailable(mutationNowMs) };
+    }
+    const cooldownUntilMs = addTimestamp(
+      mutationNowMs,
+      cooldownDurationMs,
+    );
+    const quietResetAtMs = addTimestamp(
+      mutationNowMs,
+      this.#policy.resetAfterMs,
+    );
+    const reconciliationUntilMs =
+      quietResetAtMs === null
+        ? null
+        : addTimestamp(
+            quietResetAtMs,
+            this.#policy.reconciliationRetentionMs,
+          );
+    if (
+      cooldownUntilMs === null ||
+      quietResetAtMs === null ||
+      reconciliationUntilMs === null ||
+      (state.lastCommittedAtMs !== undefined &&
+        mutationNowMs < state.lastCommittedAtMs)
+    ) {
+      return { result: this.#unavailable(mutationNowMs) };
+    }
+
+    record.status = "committed";
+    record.committedAtMs = mutationNowMs;
+    record.committedStreak = nextStreak;
+    record.cooldownDurationMs = cooldownDurationMs;
+    record.cooldownUntilMs = cooldownUntilMs;
+    record.reconciliationUntilMs = reconciliationUntilMs;
+    delete record.releasedAtMs;
+    state.streak = nextStreak;
+    state.lastCommittedAtMs = mutationNowMs;
+    state.cooldownUntilMs = cooldownUntilMs;
+    const hardDeleteByMs = calculateHardDeleteBy(
+      state,
+      mutationNowMs,
+      this.#policy,
+    );
+    if (hardDeleteByMs === null) {
+      return { result: this.#unavailable(mutationNowMs) };
+    }
+    state.hardDeleteByMs = hardDeleteByMs;
+
+    return {
+      state,
+      result: committedResult(record, false),
+    };
   }
 
   #getNow(): number | null {
@@ -1302,6 +1487,48 @@ function validateReservationId(value: string): string {
     throw new ProgressiveCooldownInputError("invalid-reservation-id");
   }
   return value;
+}
+
+function validateReconciliationCommand(
+  command: ProgressiveCooldownOpaqueReconcileCommand,
+): ProgressiveCooldownOpaqueReconcileCommand {
+  let stateKey: unknown;
+  let reservationId: unknown;
+  let signal: unknown;
+  try {
+    if (
+      !isPlainDataObject(command) ||
+      !hasOnlyKeys(command, RECONCILIATION_COMMAND_KEYS) ||
+      !hasOwnKeys(command, REQUIRED_RECONCILIATION_COMMAND_KEYS)
+    ) {
+      throw new Error("invalid shape");
+    }
+    stateKey = Object.getOwnPropertyDescriptor(command, "stateKey")?.value;
+    reservationId = Object.getOwnPropertyDescriptor(
+      command,
+      "reservationId",
+    )?.value;
+    signal = Object.getOwnPropertyDescriptor(command, "signal")?.value;
+  } catch {
+    throw new ProgressiveCooldownInputError("invalid-reconciliation-command");
+  }
+  if (typeof stateKey !== "string" || !isCanonicalStateKey(stateKey)) {
+    throw new ProgressiveCooldownInputError("invalid-state-key");
+  }
+  if (
+    typeof reservationId !== "string" ||
+    !isCanonicalReservationId(reservationId)
+  ) {
+    throw new ProgressiveCooldownInputError("invalid-reservation-id");
+  }
+  if (signal !== undefined && !isAbortSignal(signal)) {
+    throw new ProgressiveCooldownInputError("invalid-reconciliation-command");
+  }
+  return {
+    stateKey,
+    reservationId,
+    ...(signal === undefined ? {} : { signal }),
+  };
 }
 
 function validateAttemptGeneration(value: number): number {
@@ -2309,6 +2536,40 @@ function isPlainObject(input: unknown): input is Record<string, unknown> {
   }
   const prototype = Object.getPrototypeOf(input);
   return prototype === Object.prototype || prototype === null;
+}
+
+function isPlainDataObject(
+  input: unknown,
+): input is Record<string, unknown> {
+  if (!isPlainObject(input)) {
+    return false;
+  }
+  return Reflect.ownKeys(input).every((key) => {
+    if (typeof key !== "string") {
+      return false;
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    return Boolean(
+      descriptor &&
+        Object.prototype.hasOwnProperty.call(descriptor, "value") &&
+        descriptor.enumerable,
+    );
+  });
+}
+
+function isAbortSignal(input: unknown): input is AbortSignal {
+  try {
+    return (
+      typeof AbortSignal !== "undefined" &&
+      input instanceof AbortSignal &&
+      Object.getPrototypeOf(input) === AbortSignal.prototype &&
+      typeof input.aborted === "boolean" &&
+      typeof input.addEventListener === "function" &&
+      typeof input.removeEventListener === "function"
+    );
+  } catch {
+    return false;
+  }
 }
 
 function hasOnlyKeys(
