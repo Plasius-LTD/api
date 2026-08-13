@@ -21,6 +21,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
     rejecting valid release bundles after `tar` receives a broken pipe.
   - Pass the immutable tarball to npm as an explicit local package spec so npm
     does not reinterpret the workspace-relative artifact path as a Git target.
+  - Prevent release preparation from reusing an unpublished version after its
+    immutable tag was already bound to an older commit; the requested bump now
+    cuts a fresh version instead of attempting to rewrite release identity.
 
 - **Security**
   - (placeholder)

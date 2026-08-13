@@ -222,6 +222,8 @@ jobs:
           fi
 
           CURRENT_TAG="${TAG_PREFIX}${CURRENT_VER}"
+          CURRENT_COMMIT="$(git rev-parse HEAD)"
+          CURRENT_TAG_SHA="$(git rev-parse "${CURRENT_TAG}^{commit}" 2>/dev/null || true)"
           if npm view "${NAME}@${CURRENT_VER}" version >/dev/null 2>&1; then
             CURRENT_PUBLISHED="true"
           else
@@ -237,9 +239,17 @@ jobs:
             fi
           fi
 
+          REUSE_PREPARED_RELEASE="$(
+            node scripts/should-reuse-prepared-release.cjs \
+              "${CURRENT_PUBLISHED}" \
+              "${CURRENT_RELEASE_STATE}" \
+              "${CURRENT_TAG_SHA}" \
+              "${CURRENT_COMMIT}"
+          )"
+
           if [ "${BUMP}" = "none" ]; then
             TARGET_VER="${CURRENT_VER}"
-          elif grep -Eq "^## (\[${CURRENT_VER}\]|${CURRENT_VER})( |$)" "${FILE}" && { [ "${CURRENT_PUBLISHED}" != "true" ] || [ "${CURRENT_RELEASE_STATE}" != "published" ]; }; then
+          elif grep -Eq "^## (\[${CURRENT_VER}\]|${CURRENT_VER})( |$)" "${FILE}" && [ "${REUSE_PREPARED_RELEASE}" = "true" ]; then
             echo "Reusing already-prepared incomplete release version ${CURRENT_VER}."
             TARGET_VER="${CURRENT_VER}"
           else
