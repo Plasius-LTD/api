@@ -29,6 +29,8 @@ acceptances may still be reconciled so control state converges safely.
 - a compare-and-swap store;
 - an immutable-acceptance verifier;
 - optional deterministic clock and reservation-ID factory dependencies.
+- optional deterministic attempt-token factory dependencies for tests and
+  infrastructure adapters.
 
 The persisted state key has the exact
 `fbs1.<43 canonical unpadded base64url characters>` form. Reservation IDs have
@@ -40,10 +42,25 @@ The controller exposes:
 
 1. `getEligibility` for an exact availability decision;
 2. `reserve` for one atomic active reservation per scope;
-3. `commitAccepted` after the verifier confirms immutable acceptance;
-4. `release` when no immutable packet was accepted.
+3. `beginImmutableWrite` for an owner-bound atomic `reserved -> writing`
+   transition after all fallible pre-write work;
+4. `commitAccepted` after the verifier confirms immutable acceptance;
+5. `release` by the matching owner while the record is still `reserved`.
 
-`commitAccepted` and `release` are replay safe. Reconciliation workers use the
+It also exposes an immutable `policyAttestation` with a versioned deterministic
+SHA-256 fingerprint over every resolved policy field. This is a compatibility
+fingerprint, not a signature. Consumers that persist their own reconciliation
+records must obtain it from the configured controller, validate it with
+`isProgressiveCooldownPolicyAttestation`, pin an explicitly supported
+fingerprint, and derive record horizons and fallback retries from the included
+policy snapshot. This prevents independently duplicated policy constants from
+silently diverging while preserving valid custom policies for generic users.
+
+The reservation creator receives a generation and a random 128-bit `fba1`
+attempt token. Only its digest is persisted. Same-key replays receive a pending
+result and no token, so they cannot write or release on the owner's behalf.
+`beginImmutableWrite`, `commitAccepted`, and `release` are replay safe.
+Reconciliation workers use the
 same `commitAccepted` operation with the reservation details held in their
 identifier-isolated outbox. A released reservation may later be promoted to
 committed when immutable acceptance is discovered, preventing a cross-store race
@@ -52,7 +69,9 @@ from losing cooldown state.
 ## State machine
 
 ```text
-available -> reserved -> committed -> cooldown -> available
+available -> reserved -> writing -> committed -> cooldown -> available
+                 |           |
+                 |           +-> ambiguous -> pending reconciliation
                  |
                  +-> released -> available
                  |
@@ -61,7 +80,12 @@ available -> reserved -> committed -> cooldown -> available
 
 - Only compare-and-swap can create or change a reservation.
 - A second idempotency token cannot reserve while another lease is active.
-- The same token replays the original result.
+- The same idempotency token replays a terminal result or receives a pending
+  observer result without owner authority.
+- Immutable storage is forbidden until the owner wins the atomic
+  `beginImmutableWrite` compare-and-swap.
+- Release requires the matching generation and attempt token and is impossible
+  from `writing`, `committed`, or an unrelated attempt.
 - An expired reservation no longer blocks new work but remains available for a
   bounded reconciliation period.
 - Commit is impossible unless the injected verifier confirms an immutable
@@ -105,6 +129,7 @@ idempotency token. Persisted state therefore contains:
 - streak and expiry counters;
 - random reservation IDs;
 - idempotency digests;
+- attempt generations and domain-separated attempt-token digests;
 - reservation status and server timestamps.
 
 It contains no source subject, purpose string, account identifier, IP address,
@@ -112,8 +137,10 @@ fingerprint, request metadata, or content. The state key and its records remain
 pseudonymous personal data and must be isolated, access restricted, excluded from
 logs and analytics, and deleted according to the emitted `hardDeleteByMs`.
 
-The package has no logger and all public errors use closed codes without
-reflecting input or storage exceptions.
+The raw attempt token exists only in the owner result. It is never persisted and
+must not enter packets, outboxes, logs, exceptions, traces, Admin, MCP, or
+analytics. The package has no logger and all public errors use closed codes
+without reflecting input or storage exceptions.
 
 ## Store requirements
 
@@ -160,8 +187,13 @@ a successful update that reuses its expected revision all fail closed.
 Tests cover:
 
 - the exact default ladder, cap, and 48-hour reset;
+- immutable exact-policy attestations, custom-policy fingerprints, tamper
+  rejection, reordered legitimate serialized objects, and public exports;
 - exact and rounded-up retry timing;
 - concurrent reservations and commits;
+- both orderings of the release/begin-write race;
+- same-key observers receiving no write or release authority;
+- ambiguous begin-write compare-and-swap recovery without reopening release;
 - idempotent reserve, commit, and release;
 - release/acceptance reconciliation;
 - expired reservation reconciliation;

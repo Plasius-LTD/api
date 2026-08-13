@@ -20,6 +20,17 @@ export interface ProgressiveCooldownPolicy {
   readonly operationTimeoutMs: number;
 }
 
+/**
+ * Immutable proof of the exact policy resolved by a progressive-cooldown
+ * controller. Consumers that couple durable records to policy timing can pin
+ * this fingerprint and derive every related horizon from the attested policy.
+ */
+export interface ProgressiveCooldownPolicyAttestation {
+  readonly schemaVersion: "1";
+  readonly fingerprint: string;
+  readonly policy: ProgressiveCooldownPolicy;
+}
+
 export const DEFAULT_PROGRESSIVE_COOLDOWN_POLICY: ProgressiveCooldownPolicy =
   Object.freeze({
     cooldownLadderMs: Object.freeze([
@@ -39,6 +50,8 @@ export const DEFAULT_PROGRESSIVE_COOLDOWN_POLICY: ProgressiveCooldownPolicy =
   });
 
 export type ProgressiveCooldownInputErrorCode =
+  | "invalid-attempt-generation"
+  | "invalid-attempt-token"
   | "invalid-idempotency-key"
   | "invalid-opaque-subject"
   | "invalid-policy"
@@ -74,6 +87,7 @@ export interface ProgressiveCooldownScope {
 
 export type ProgressiveCooldownReservationStatus =
   | "reserved"
+  | "writing"
   | "committed"
   | "released";
 
@@ -86,6 +100,11 @@ export interface ProgressiveCooldownReservationRecord {
   readonly leaseExpiresAtMs: number;
   /** Last instant at which late immutable-acceptance reconciliation is valid. */
   readonly reconciliationUntilMs: number;
+  /** Owner generation; absent only on pre-write-authority legacy records. */
+  readonly attemptGeneration?: number;
+  /** Digest of the one-use write authority; the raw token is never persisted. */
+  readonly attemptTokenDigest?: string;
+  readonly writeStartedAtMs?: number;
   readonly committedAtMs?: number;
   readonly committedStreak?: number;
   readonly cooldownDurationMs?: number;
@@ -166,6 +185,8 @@ export interface OpaqueProgressiveCooldownControllerOptions {
   readonly clock?: ProgressiveCooldownClock;
   /** Test/infrastructure hook; output must be a canonical random `fbr1` ID. */
   readonly reservationIdFactory?: () => string;
+  /** Test/infrastructure hook; output must be a canonical random `fba1` token. */
+  readonly attemptTokenFactory?: () => string;
   readonly policy?: Partial<ProgressiveCooldownPolicy>;
 }
 
@@ -180,6 +201,13 @@ export interface ProgressiveCooldownReservationCommand extends ProgressiveCooldo
 
 export interface ProgressiveCooldownTransitionCommand extends ProgressiveCooldownReservationCommand {
   readonly reservationId: string;
+}
+
+export interface ProgressiveCooldownOwnedTransitionCommand
+  extends ProgressiveCooldownTransitionCommand {
+  readonly attemptGeneration: number;
+  /** Raw owner authority. It must never be logged, persisted, or projected. */
+  readonly attemptToken: string;
 }
 
 export interface ProgressiveCooldownUnavailableResult {
@@ -211,7 +239,17 @@ export type ProgressiveCooldownEligibilityResult =
 
 export interface ProgressiveCooldownReservedResult {
   readonly status: "reserved";
-  readonly replayed: boolean;
+  readonly replayed: false;
+  readonly reservationId: string;
+  readonly reservedAtMs: number;
+  readonly leaseExpiresAtMs: number;
+  readonly attemptGeneration: number;
+  /** Returned only to the invocation that created the reservation. */
+  readonly attemptToken: string;
+}
+
+export interface ProgressiveCooldownAttemptPendingResult {
+  readonly status: "attempt-pending";
   readonly reservationId: string;
   readonly reservedAtMs: number;
   readonly leaseExpiresAtMs: number;
@@ -221,6 +259,21 @@ export interface ProgressiveCooldownPendingResult {
   readonly status: "pending-reconciliation";
   readonly reservationId: string;
   readonly leaseExpiredAtMs: number;
+  readonly reconciliationUntilMs: number;
+}
+
+export interface ProgressiveCooldownWriteStartedResult {
+  readonly status: "write-started";
+  readonly replayed: boolean;
+  readonly reservationId: string;
+  readonly writeStartedAtMs: number;
+  readonly reconciliationUntilMs: number;
+}
+
+export interface ProgressiveCooldownWriteInProgressResult {
+  readonly status: "write-in-progress";
+  readonly reservationId: string;
+  readonly reconciliationUntilMs: number;
 }
 
 export interface ProgressiveCooldownReleasedResult {
@@ -252,8 +305,13 @@ export interface ProgressiveCooldownReservationMismatchResult {
   readonly status: "reservation-mismatch";
 }
 
+export interface ProgressiveCooldownAttemptMismatchResult {
+  readonly status: "attempt-mismatch";
+}
+
 export type ProgressiveCooldownReserveResult =
   | ProgressiveCooldownReservedResult
+  | ProgressiveCooldownAttemptPendingResult
   | ProgressiveCooldownPendingResult
   | ProgressiveCooldownReleasedResult
   | ProgressiveCooldownCommittedResult
@@ -267,11 +325,23 @@ export type ProgressiveCooldownCommitResult =
   | ProgressiveCooldownReservationMismatchResult
   | ProgressiveCooldownUnavailableResult;
 
-export type ProgressiveCooldownReleaseResult =
+export type ProgressiveCooldownBeginWriteResult =
+  | ProgressiveCooldownWriteStartedResult
+  | ProgressiveCooldownPendingResult
   | ProgressiveCooldownReleasedResult
   | ProgressiveCooldownCommittedResult
   | ProgressiveCooldownReservationMissingResult
   | ProgressiveCooldownReservationMismatchResult
+  | ProgressiveCooldownAttemptMismatchResult
+  | ProgressiveCooldownUnavailableResult;
+
+export type ProgressiveCooldownReleaseResult =
+  | ProgressiveCooldownReleasedResult
+  | ProgressiveCooldownCommittedResult
+  | ProgressiveCooldownWriteInProgressResult
+  | ProgressiveCooldownReservationMissingResult
+  | ProgressiveCooldownReservationMismatchResult
+  | ProgressiveCooldownAttemptMismatchResult
   | ProgressiveCooldownUnavailableResult;
 
 type MutableReservationRecord = {
@@ -306,6 +376,7 @@ const VERSION_PATTERN = /^v[1-9][0-9]{0,5}$/u;
 const IDEMPOTENCY_PATTERN = /^[A-Za-z0-9_-]{22,128}$/u;
 const STATE_KEY_PATTERN = /^fbs1\.([A-Za-z0-9_-]{42}[AEIMQUYcgkosw048])$/u;
 const RESERVATION_ID_PATTERN = /^fbr1\.([A-Za-z0-9_-]{21}[AQgw])$/u;
+const ATTEMPT_TOKEN_PATTERN = /^fba1\.([A-Za-z0-9_-]{21}[AQgw])$/u;
 const REVISION_PATTERN = /^[\x20-\x7e]{1,256}$/u;
 
 const SCOPE_KEYS = new Set(["purpose", "version", "opaqueSubjectKey"]);
@@ -339,6 +410,9 @@ const RESERVATION_KEYS = new Set([
   "reservedAtMs",
   "leaseExpiresAtMs",
   "reconciliationUntilMs",
+  "attemptGeneration",
+  "attemptTokenDigest",
+  "writeStartedAtMs",
   "committedAtMs",
   "committedStreak",
   "cooldownDurationMs",
@@ -355,6 +429,12 @@ const POLICY_KEYS = new Set([
   "maxRevisionConflicts",
   "operationTimeoutMs",
 ]);
+const POLICY_ATTESTATION_KEYS = new Set([
+  "schemaVersion",
+  "fingerprint",
+  "policy",
+]);
+const POLICY_FINGERPRINT_PATTERN = /^pcp1\.[A-Za-z0-9_-]{43}$/u;
 const APPLIED_COMPARE_AND_SWAP_KEYS = new Set(["applied", "revision"]);
 const CONFLICT_COMPARE_AND_SWAP_KEYS = new Set(["applied"]);
 
@@ -462,7 +542,9 @@ export class OpaqueProgressiveCooldownController {
   readonly #acceptanceVerifier: ImmutableAcceptanceVerifier;
   readonly #clock: ProgressiveCooldownClock;
   readonly #reservationIdFactory: () => string;
+  readonly #attemptTokenFactory: () => string;
   readonly #policy: ProgressiveCooldownPolicy;
+  readonly #policyAttestation: ProgressiveCooldownPolicyAttestation;
 
   constructor(options: OpaqueProgressiveCooldownControllerOptions) {
     if (
@@ -479,12 +561,22 @@ export class OpaqueProgressiveCooldownController {
     } catch {
       throw new ProgressiveCooldownInputError("invalid-policy");
     }
+    this.#policyAttestation = attestResolvedProgressiveCooldownPolicy(
+      this.#policy,
+    );
     this.#store = options.store;
     this.#acceptanceVerifier = options.acceptanceVerifier;
     this.#clock = options.clock ?? { nowMs: () => Date.now() };
     this.#reservationIdFactory =
       options.reservationIdFactory ??
       (() => `fbr1.${randomBytes(16).toString("base64url")}`);
+    this.#attemptTokenFactory =
+      options.attemptTokenFactory ??
+      (() => `fba1.${randomBytes(16).toString("base64url")}`);
+  }
+
+  get policyAttestation(): ProgressiveCooldownPolicyAttestation {
+    return this.#policyAttestation;
   }
 
   async getEligibility(
@@ -539,6 +631,7 @@ export class OpaqueProgressiveCooldownController {
     }
 
     let candidateReservationId: string | undefined;
+    let candidateAttemptToken: string | undefined;
     const getCandidateReservationId = (): string | null => {
       if (candidateReservationId) {
         return candidateReservationId;
@@ -552,6 +645,21 @@ export class OpaqueProgressiveCooldownController {
           return null;
         }
         candidateReservationId = generated;
+        return generated;
+      } catch {
+        return null;
+      }
+    };
+    const getCandidateAttemptToken = (): string | null => {
+      if (candidateAttemptToken) {
+        return candidateAttemptToken;
+      }
+      try {
+        const generated = this.#attemptTokenFactory();
+        if (typeof generated !== "string" || !isCanonicalAttemptToken(generated)) {
+          return null;
+        }
+        candidateAttemptToken = generated;
         return generated;
       } catch {
         return null;
@@ -595,8 +703,11 @@ export class OpaqueProgressiveCooldownController {
           }
 
           const reservationId = getCandidateReservationId();
+          const attemptToken = getCandidateAttemptToken();
+          const attemptGeneration = 1;
           if (
             !reservationId ||
+            !attemptToken ||
             state.reservations.some(
               (record) => record.reservationId === reservationId,
             )
@@ -618,6 +729,19 @@ export class OpaqueProgressiveCooldownController {
           if (leaseExpiresAtMs === null || reconciliationUntilMs === null) {
             return { result: this.#unavailable(mutationNowMs) };
           }
+          const attemptTokenDigest = deriveAttemptTokenDigest(
+            stateKey,
+            reservationId,
+            attemptGeneration,
+            attemptToken,
+          );
+          if (
+            state.reservations.some(
+              (record) => record.attemptTokenDigest === attemptTokenDigest,
+            )
+          ) {
+            return { result: this.#unavailable(mutationNowMs) };
+          }
           state.reservations.push({
             reservationId,
             idempotencyDigest,
@@ -625,6 +749,8 @@ export class OpaqueProgressiveCooldownController {
             reservedAtMs: mutationNowMs,
             leaseExpiresAtMs,
             reconciliationUntilMs,
+            attemptGeneration,
+            attemptTokenDigest,
           });
           const hardDeleteByMs = calculateHardDeleteBy(
             state,
@@ -644,7 +770,95 @@ export class OpaqueProgressiveCooldownController {
               reservationId,
               reservedAtMs: mutationNowMs,
               leaseExpiresAtMs,
+              attemptGeneration,
+              attemptToken,
             },
+          };
+        },
+      );
+    } finally {
+      operation.dispose();
+    }
+  }
+
+  /**
+   * Atomically acquires immutable-write authority for the reservation owner.
+   * A caller must receive `write-started` before invoking immutable storage.
+   */
+  async beginImmutableWrite(
+    command: ProgressiveCooldownOwnedTransitionCommand,
+  ): Promise<ProgressiveCooldownBeginWriteResult> {
+    const validatedScope = validateScope(command?.scope);
+    const idempotencyKey = validateIdempotencyKey(command?.idempotencyKey);
+    const reservationId = validateReservationId(command?.reservationId);
+    const attemptGeneration = validateAttemptGeneration(
+      command?.attemptGeneration,
+    );
+    const attemptToken = validateAttemptToken(command?.attemptToken);
+    const stateKey = deriveStateKey(validatedScope);
+    const idempotencyDigest = deriveIdempotencyDigest(stateKey, idempotencyKey);
+    const attemptTokenDigest = deriveAttemptTokenDigest(
+      stateKey,
+      reservationId,
+      attemptGeneration,
+      attemptToken,
+    );
+    const nowMs = this.#getNow();
+    if (nowMs === null) {
+      return this.#unavailable(null);
+    }
+
+    const operation = createOperationDeadline(
+      nowMs,
+      this.#policy.operationTimeoutMs,
+      command.signal,
+    );
+    if (!operation) {
+      return this.#unavailable(null);
+    }
+    try {
+      return await this.#mutate<ProgressiveCooldownBeginWriteResult>(
+        stateKey,
+        nowMs,
+        operation,
+        (current, mutationNowMs) => {
+          const state = normalizeState(current, mutationNowMs, this.#policy);
+          if (!state) {
+            return { result: this.#unavailable(mutationNowMs) };
+          }
+          const record = state.reservations.find(
+            (candidate) => candidate.reservationId === reservationId,
+          );
+          if (!record) {
+            return { result: { status: "reservation-not-found" } };
+          }
+          if (record.idempotencyDigest !== idempotencyDigest) {
+            return { result: { status: "reservation-mismatch" } };
+          }
+          if (
+            record.attemptGeneration !== attemptGeneration ||
+            record.attemptTokenDigest !== attemptTokenDigest
+          ) {
+            return { result: { status: "attempt-mismatch" } };
+          }
+          if (record.status === "committed") {
+            return { result: committedResult(record, true) };
+          }
+          if (record.status === "released") {
+            return { result: releasedResult(record, true) };
+          }
+          if (record.status === "writing") {
+            return { result: writeStartedResult(record, true) };
+          }
+          if (record.leaseExpiresAtMs <= mutationNowMs) {
+            return { result: pendingReconciliationResult(record) };
+          }
+
+          record.status = "writing";
+          record.writeStartedAtMs = mutationNowMs;
+          return {
+            state,
+            result: writeStartedResult(record, false),
           };
         },
       );
@@ -817,13 +1031,23 @@ export class OpaqueProgressiveCooldownController {
   }
 
   async release(
-    command: ProgressiveCooldownTransitionCommand,
+    command: ProgressiveCooldownOwnedTransitionCommand,
   ): Promise<ProgressiveCooldownReleaseResult> {
     const validatedScope = validateScope(command?.scope);
     const idempotencyKey = validateIdempotencyKey(command?.idempotencyKey);
     const reservationId = validateReservationId(command?.reservationId);
+    const attemptGeneration = validateAttemptGeneration(
+      command?.attemptGeneration,
+    );
+    const attemptToken = validateAttemptToken(command?.attemptToken);
     const stateKey = deriveStateKey(validatedScope);
     const idempotencyDigest = deriveIdempotencyDigest(stateKey, idempotencyKey);
+    const attemptTokenDigest = deriveAttemptTokenDigest(
+      stateKey,
+      reservationId,
+      attemptGeneration,
+      attemptToken,
+    );
     const nowMs = this.#getNow();
     if (nowMs === null) {
       return this.#unavailable(null);
@@ -856,11 +1080,20 @@ export class OpaqueProgressiveCooldownController {
           if (record.idempotencyDigest !== idempotencyDigest) {
             return { result: { status: "reservation-mismatch" } };
           }
+          if (
+            record.attemptGeneration !== attemptGeneration ||
+            record.attemptTokenDigest !== attemptTokenDigest
+          ) {
+            return { result: { status: "attempt-mismatch" } };
+          }
           if (record.status === "committed") {
             return { result: committedResult(record, true) };
           }
           if (record.status === "released") {
             return { result: releasedResult(record, true) };
+          }
+          if (record.status === "writing") {
+            return { result: writeInProgressResult(record) };
           }
 
           record.status = "released";
@@ -1071,6 +1304,20 @@ function validateReservationId(value: string): string {
   return value;
 }
 
+function validateAttemptGeneration(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new ProgressiveCooldownInputError("invalid-attempt-generation");
+  }
+  return value;
+}
+
+function validateAttemptToken(value: string): string {
+  if (typeof value !== "string" || !isCanonicalAttemptToken(value)) {
+    throw new ProgressiveCooldownInputError("invalid-attempt-token");
+  }
+  return value;
+}
+
 function isCanonicalBase64Url32(value: string): boolean {
   if (!OPAQUE_SUBJECT_PATTERN.test(value)) {
     return false;
@@ -1085,6 +1332,21 @@ function isCanonicalBase64Url32(value: string): boolean {
 
 function isCanonicalReservationId(value: string): boolean {
   const match = RESERVATION_ID_PATTERN.exec(value);
+  if (!match?.[1]) {
+    return false;
+  }
+  try {
+    const decoded = Buffer.from(match[1], "base64url");
+    return (
+      decoded.byteLength === 16 && decoded.toString("base64url") === match[1]
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isCanonicalAttemptToken(value: string): boolean {
+  const match = ATTEMPT_TOKEN_PATTERN.exec(value);
   if (!match?.[1]) {
     return false;
   }
@@ -1143,6 +1405,25 @@ function deriveIdempotencyDigest(
     .digest("base64url");
 }
 
+function deriveAttemptTokenDigest(
+  stateKey: string,
+  reservationId: string,
+  attemptGeneration: number,
+  attemptToken: string,
+): string {
+  return createHash("sha256")
+    .update("opaque-progressive-cooldown-attempt:v1", "utf8")
+    .update("\0", "utf8")
+    .update(stateKey, "utf8")
+    .update("\0", "utf8")
+    .update(reservationId, "utf8")
+    .update("\0", "utf8")
+    .update(String(attemptGeneration), "utf8")
+    .update("\0", "utf8")
+    .update(attemptToken, "utf8")
+    .digest("base64url");
+}
+
 function resolvePolicy(
   override: Partial<ProgressiveCooldownPolicy> | undefined,
 ): ProgressiveCooldownPolicy {
@@ -1189,6 +1470,85 @@ function resolvePolicy(
     cooldownLadderMs: Object.freeze(ladder),
   });
 }
+
+function fingerprintProgressiveCooldownPolicy(
+  policy: ProgressiveCooldownPolicy,
+): string {
+  const canonicalPolicy = JSON.stringify([
+    1,
+    policy.cooldownLadderMs,
+    policy.resetAfterMs,
+    policy.reservationLeaseMs,
+    policy.unavailableRetryAfterMs,
+    policy.reconciliationRetentionMs,
+    policy.maxReservationRecords,
+    policy.maxRevisionConflicts,
+    policy.operationTimeoutMs,
+  ]);
+  return `pcp1.${createHash("sha256")
+    .update("opaque-progressive-cooldown-policy:v1", "utf8")
+    .update("\0", "utf8")
+    .update(canonicalPolicy, "utf8")
+    .digest("base64url")}`;
+}
+
+function attestResolvedProgressiveCooldownPolicy(
+  policy: ProgressiveCooldownPolicy,
+): ProgressiveCooldownPolicyAttestation {
+  const policySnapshot: ProgressiveCooldownPolicy = Object.freeze({
+    ...policy,
+    cooldownLadderMs: Object.freeze([...policy.cooldownLadderMs]),
+  });
+  return Object.freeze({
+    schemaVersion: "1",
+    fingerprint: fingerprintProgressiveCooldownPolicy(policySnapshot),
+    policy: policySnapshot,
+  });
+}
+
+/**
+ * Resolve, validate, snapshot, and attest a progressive-cooldown policy.
+ */
+export function attestProgressiveCooldownPolicy(
+  policy?: Partial<ProgressiveCooldownPolicy>,
+): ProgressiveCooldownPolicyAttestation {
+  return attestResolvedProgressiveCooldownPolicy(resolvePolicy(policy));
+}
+
+/**
+ * Validate a serialized policy attestation, including its exact key set and
+ * fingerprint. This never trusts a caller-provided fingerprint on its own.
+ */
+export function isProgressiveCooldownPolicyAttestation(
+  input: unknown,
+): input is ProgressiveCooldownPolicyAttestation {
+  if (
+    !isPlainObject(input) ||
+    !hasOnlyKeys(input, POLICY_ATTESTATION_KEYS) ||
+    !hasOwnKeys(input, POLICY_ATTESTATION_KEYS) ||
+    input.schemaVersion !== "1" ||
+    typeof input.fingerprint !== "string" ||
+    !POLICY_FINGERPRINT_PATTERN.test(input.fingerprint) ||
+    !isPlainObject(input.policy) ||
+    !hasOnlyKeys(input.policy, POLICY_KEYS) ||
+    !hasOwnKeys(input.policy, POLICY_KEYS)
+  ) {
+    return false;
+  }
+
+  try {
+    const resolved = resolvePolicy(
+      input.policy as unknown as ProgressiveCooldownPolicy,
+    );
+    const expected = attestResolvedProgressiveCooldownPolicy(resolved);
+    return expected.fingerprint === input.fingerprint;
+  } catch {
+    return false;
+  }
+}
+
+export const DEFAULT_PROGRESSIVE_COOLDOWN_POLICY_ATTESTATION =
+  attestProgressiveCooldownPolicy();
 
 function isDuration(value: number, minimum: number, maximum: number): boolean {
   return Number.isSafeInteger(value) && value >= minimum && value <= maximum;
@@ -1286,6 +1646,8 @@ function normalizeState(
     state.reservations.some(
       (record) =>
         record.reservedAtMs > nowMs ||
+        (record.writeStartedAtMs !== undefined &&
+          record.writeStartedAtMs > nowMs) ||
         (record.committedAtMs !== undefined && record.committedAtMs > nowMs) ||
         (record.releasedAtMs !== undefined && record.releasedAtMs > nowMs),
     )
@@ -1422,7 +1784,8 @@ function eligibilityFor(
   const activeLeaseEnds = state.reservations
     .filter(
       (record) =>
-        record.status === "reserved" && record.leaseExpiresAtMs > nowMs,
+        (record.status === "reserved" || record.status === "writing") &&
+        record.leaseExpiresAtMs > nowMs,
     )
     .map((record) => record.leaseExpiresAtMs);
   if (activeLeaseEnds.length > 0) {
@@ -1454,7 +1817,7 @@ function reserveReplayResult(
   record: MutableReservationRecord,
   nowMs: number,
 ):
-  | ProgressiveCooldownReservedResult
+  | ProgressiveCooldownAttemptPendingResult
   | ProgressiveCooldownPendingResult
   | ProgressiveCooldownReleasedResult
   | ProgressiveCooldownCommittedResult {
@@ -1464,19 +1827,59 @@ function reserveReplayResult(
   if (record.status === "released") {
     return releasedResult(record, true);
   }
-  if (record.leaseExpiresAtMs <= nowMs) {
-    return {
-      status: "pending-reconciliation",
-      reservationId: record.reservationId,
-      leaseExpiredAtMs: record.leaseExpiresAtMs,
-    };
+  if (
+    record.status === "writing" ||
+    record.leaseExpiresAtMs <= nowMs ||
+    record.attemptGeneration === undefined ||
+    record.attemptTokenDigest === undefined
+  ) {
+    return pendingReconciliationResult(record);
   }
   return {
-    status: "reserved",
-    replayed: true,
+    status: "attempt-pending",
     reservationId: record.reservationId,
     reservedAtMs: record.reservedAtMs,
     leaseExpiresAtMs: record.leaseExpiresAtMs,
+  };
+}
+
+function pendingReconciliationResult(
+  record: MutableReservationRecord,
+): ProgressiveCooldownPendingResult {
+  return {
+    status: "pending-reconciliation",
+    reservationId: record.reservationId,
+    leaseExpiredAtMs: record.leaseExpiresAtMs,
+    reconciliationUntilMs: record.reconciliationUntilMs,
+  };
+}
+
+function writeStartedResult(
+  record: MutableReservationRecord,
+  replayed: boolean,
+): ProgressiveCooldownWriteStartedResult {
+  if (record.status !== "writing" || record.writeStartedAtMs === undefined) {
+    throw new Error("Invalid internal progressive cooldown state.");
+  }
+  return {
+    status: "write-started",
+    replayed,
+    reservationId: record.reservationId,
+    writeStartedAtMs: record.writeStartedAtMs,
+    reconciliationUntilMs: record.reconciliationUntilMs,
+  };
+}
+
+function writeInProgressResult(
+  record: MutableReservationRecord,
+): ProgressiveCooldownWriteInProgressResult {
+  if (record.status !== "writing") {
+    throw new Error("Invalid internal progressive cooldown state.");
+  }
+  return {
+    status: "write-in-progress",
+    reservationId: record.reservationId,
+    reconciliationUntilMs: record.reconciliationUntilMs,
   };
 }
 
@@ -1568,17 +1971,23 @@ function parseState(
   const reservations: ProgressiveCooldownReservationRecord[] = [];
   const reservationIds = new Set<string>();
   const idempotencyDigests = new Set<string>();
+  const attemptTokenDigests = new Set<string>();
   for (const candidate of input.reservations) {
     const parsed = parseReservation(candidate, policy, nowMs);
     if (
       !parsed ||
       reservationIds.has(parsed.reservationId) ||
-      idempotencyDigests.has(parsed.idempotencyDigest)
+      idempotencyDigests.has(parsed.idempotencyDigest) ||
+      (parsed.attemptTokenDigest !== undefined &&
+        attemptTokenDigests.has(parsed.attemptTokenDigest))
     ) {
       return null;
     }
     reservationIds.add(parsed.reservationId);
     idempotencyDigests.add(parsed.idempotencyDigest);
+    if (parsed.attemptTokenDigest !== undefined) {
+      attemptTokenDigests.add(parsed.attemptTokenDigest);
+    }
     reservations.push(parsed);
   }
 
@@ -1740,12 +2149,48 @@ function parseReservation(
     return null;
   }
 
+  const attemptGeneration =
+    input.attemptGeneration === undefined
+      ? undefined
+      : Number.isSafeInteger(input.attemptGeneration) &&
+          (input.attemptGeneration as number) >= 1
+        ? (input.attemptGeneration as number)
+        : null;
+  const attemptTokenDigest =
+    input.attemptTokenDigest === undefined
+      ? undefined
+      : typeof input.attemptTokenDigest === "string" &&
+          isCanonicalBase64Url32(input.attemptTokenDigest)
+        ? input.attemptTokenDigest
+        : null;
+  const writeStartedAtMs =
+    input.writeStartedAtMs === undefined
+      ? undefined
+      : isTimestamp(input.writeStartedAtMs)
+        ? input.writeStartedAtMs
+        : null;
+  if (
+    attemptGeneration === null ||
+    attemptTokenDigest === null ||
+    writeStartedAtMs === null ||
+    (attemptGeneration === undefined) !== (attemptTokenDigest === undefined) ||
+    (writeStartedAtMs !== undefined &&
+      (attemptGeneration === undefined ||
+        writeStartedAtMs < input.reservedAtMs ||
+        writeStartedAtMs >= input.leaseExpiresAtMs ||
+        writeStartedAtMs > nowMs))
+  ) {
+    return null;
+  }
+
   const common = {
     reservationId: input.reservationId,
     idempotencyDigest: input.idempotencyDigest,
     reservedAtMs: input.reservedAtMs,
     leaseExpiresAtMs: input.leaseExpiresAtMs,
     reconciliationUntilMs: input.reconciliationUntilMs,
+    ...(attemptGeneration === undefined ? {} : { attemptGeneration }),
+    ...(attemptTokenDigest === undefined ? {} : { attemptTokenDigest }),
   };
 
   if (input.status === "reserved") {
@@ -1760,11 +2205,34 @@ function parseReservation(
       input.committedStreak !== undefined ||
       input.cooldownDurationMs !== undefined ||
       input.cooldownUntilMs !== undefined ||
-      input.releasedAtMs !== undefined
+      input.releasedAtMs !== undefined ||
+      writeStartedAtMs !== undefined
     ) {
       return null;
     }
     return { ...common, status: "reserved" };
+  }
+
+  if (input.status === "writing") {
+    const expectedRetainUntilMs = addTimestamp(
+      input.leaseExpiresAtMs,
+      policy.reconciliationRetentionMs,
+    );
+    if (
+      attemptGeneration === undefined ||
+      attemptTokenDigest === undefined ||
+      writeStartedAtMs === undefined ||
+      expectedRetainUntilMs === null ||
+      input.reconciliationUntilMs !== expectedRetainUntilMs ||
+      input.committedAtMs !== undefined ||
+      input.committedStreak !== undefined ||
+      input.cooldownDurationMs !== undefined ||
+      input.cooldownUntilMs !== undefined ||
+      input.releasedAtMs !== undefined
+    ) {
+      return null;
+    }
+    return { ...common, status: "writing", writeStartedAtMs };
   }
 
   if (input.status === "released") {
@@ -1780,7 +2248,8 @@ function parseReservation(
       input.committedAtMs !== undefined ||
       input.committedStreak !== undefined ||
       input.cooldownDurationMs !== undefined ||
-      input.cooldownUntilMs !== undefined
+      input.cooldownUntilMs !== undefined ||
+      writeStartedAtMs !== undefined
     ) {
       return null;
     }
@@ -1827,6 +2296,7 @@ function parseReservation(
       committedStreak: input.committedStreak as number,
       cooldownDurationMs: input.cooldownDurationMs,
       cooldownUntilMs: input.cooldownUntilMs,
+      ...(writeStartedAtMs === undefined ? {} : { writeStartedAtMs }),
     };
   }
 

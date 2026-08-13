@@ -32,6 +32,9 @@ Provide a purpose/version-scoped opaque reservation controller with:
   acceptance;
 - a non-decreasing configurable ladder capped at 24 hours, defaulting to
   5m, 15m, 1h, 6h, and 24h;
+- an immutable, versioned policy snapshot and deterministic public fingerprint
+  so consumers can pin compatible controller policy and derive coupled durable
+  record horizons without duplicating constants;
 - reset after 48 quiet hours;
 - bounded dependency deadlines, caller cancellation, records, conflict retries,
   reconciliation, and retention;
@@ -87,6 +90,8 @@ only storage primitive it requires.
 - Consumer stores can use Cosmos DB ETags, SQL row versions, Redis scripts, or
   equivalent atomic primitives.
 - Raw identity and request telemetry never enter the package.
+- Consumers can reject incompatible policy/controller composition before
+  durable I/O while the generic controller retains supported custom policies.
 
 ### Negative
 
@@ -99,6 +104,9 @@ only storage primitive it requires.
 - A delayed reconciliation commit conservatively starts its cooldown when the
   acceptance is confirmed, which can extend suppression by the reconciliation
   delay.
+- The policy fingerprint is not an authentication signature; consumers must
+  obtain the attestation from their configured controller dependency and pin an
+  explicitly supported fingerprint at their own trust boundary.
 
 ## Rollback
 

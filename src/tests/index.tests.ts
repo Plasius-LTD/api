@@ -16,6 +16,9 @@ import {
   shouldEnforceHttps,
   OpaqueProgressiveCooldownController,
   DEFAULT_PROGRESSIVE_COOLDOWN_POLICY,
+  DEFAULT_PROGRESSIVE_COOLDOWN_POLICY_ATTESTATION,
+  attestProgressiveCooldownPolicy,
+  isProgressiveCooldownPolicyAttestation,
 } from "../index.js";
 
 describe("public API helper entrypoint", () => {
@@ -65,5 +68,13 @@ describe("public API helper entrypoint", () => {
       21_600_000,
       86_400_000,
     ]);
+    expect(attestProgressiveCooldownPolicy()).toEqual(
+      DEFAULT_PROGRESSIVE_COOLDOWN_POLICY_ATTESTATION
+    );
+    expect(
+      isProgressiveCooldownPolicyAttestation(
+        DEFAULT_PROGRESSIVE_COOLDOWN_POLICY_ATTESTATION
+      )
+    ).toBe(true);
   });
 });
