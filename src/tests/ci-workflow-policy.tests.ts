@@ -13,6 +13,9 @@ const npmConfig = read(".npmrc");
 const releasePreidScript = fileURLToPath(
   new URL("../../scripts/derive-release-preid.cjs", import.meta.url),
 );
+const releaseReuseScript = fileURLToPath(
+  new URL("../../scripts/should-reuse-prepared-release.cjs", import.meta.url),
+);
 
 describe("release workflow trust boundaries", () => {
   it("runs pull-request validation only for same-repository heads", () => {
@@ -101,6 +104,34 @@ describe("release workflow trust boundaries", () => {
     );
     expect(cdWorkflow).not.toContain(
       'npm publish "${TARBALL}" --ignore-scripts "${PUBLISH_ARGS[@]}"',
+    );
+  });
+
+  it("never reuses a version whose immutable tag points at an older commit", () => {
+    const current = "a".repeat(40);
+    const older = "b".repeat(40);
+    const evaluate = (...args: string[]): string =>
+      execFileSync(process.execPath, [releaseReuseScript, ...args], {
+        encoding: "utf8",
+      });
+
+    expect(evaluate("false", "missing", "", current)).toBe("true");
+    expect(evaluate("false", "draft", current, current)).toBe("true");
+    expect(evaluate("true", "draft", current, current)).toBe("true");
+    expect(evaluate("false", "draft", older, current)).toBe("false");
+    expect(evaluate("true", "published", current, current)).toBe("false");
+
+    const invalid = spawnSync(
+      process.execPath,
+      [releaseReuseScript, "false", "draft", "identity-like-value", current],
+      { encoding: "utf8" },
+    );
+    expect(invalid.status).toBe(1);
+    expect(invalid.stdout).toBe("");
+    expect(invalid.stderr).toBe("Cannot evaluate prepared release reuse.\n");
+
+    expect(releasePrepareWorkflow).toContain(
+      'node scripts/should-reuse-prepared-release.cjs',
     );
   });
 
