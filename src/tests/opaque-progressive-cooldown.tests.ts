@@ -1847,6 +1847,417 @@ describe("OpaqueProgressiveCooldownController", () => {
     });
   });
 
+  it("reconciles immutable acceptance using only isolated state and reservation identifiers", async () => {
+    const store = new AtomicMemoryStore();
+    const verifierCalls: Array<{
+      stateKey: string;
+      reservationId: string;
+      signal: AbortSignal;
+      deadlineAtMs: number;
+    }> = [];
+    let accepted = false;
+    const testHarness = harness({
+      store,
+      acceptanceVerifier: {
+        hasImmutableAcceptance: async (input) => {
+          verifierCalls.push(input);
+          return accepted;
+        },
+      },
+    });
+    const reserved = await testHarness.controller.reserve({
+      scope,
+      idempotencyKey: token(1),
+    });
+    if (reserved.status !== "reserved") {
+      throw new Error("expected reservation");
+    }
+    await testHarness.controller.beginImmutableWrite({
+      scope,
+      idempotencyKey: token(1),
+      reservationId: reserved.reservationId,
+      attemptGeneration: reserved.attemptGeneration,
+      attemptToken: reserved.attemptToken,
+    });
+    const stateKey = store.keys[0];
+    if (!stateKey) {
+      throw new Error("expected state key");
+    }
+    accepted = true;
+
+    const result = await testHarness.controller.reconcileImmutableAcceptance({
+      stateKey,
+      reservationId: reserved.reservationId,
+    });
+
+    expect(result).toMatchObject({
+      status: "committed",
+      replayed: false,
+      reservationId: reserved.reservationId,
+      streak: 1,
+      cooldownDurationMs: 5 * MINUTE,
+    });
+    expect(verifierCalls).toHaveLength(1);
+    expect(verifierCalls[0]).toMatchObject({
+      stateKey,
+      reservationId: reserved.reservationId,
+      deadlineAtMs: START + 2_000,
+    });
+    expect(verifierCalls[0]?.signal).toBeInstanceOf(AbortSignal);
+    expect(Object.keys(verifierCalls[0] ?? {}).sort()).toEqual([
+      "deadlineAtMs",
+      "reservationId",
+      "signal",
+      "stateKey",
+    ]);
+    const persisted = store.records.get(stateKey)?.state;
+    expect(persisted?.streak).toBe(1);
+    expect(persisted?.reservations[0]?.status).toBe("committed");
+  });
+
+  it("keeps unaccepted isolated reconciliation pending without mutating control state", async () => {
+    const store = new AtomicMemoryStore();
+    const testHarness = harness({
+      store,
+      acceptanceVerifier: {
+        hasImmutableAcceptance: async () => false,
+      },
+    });
+    const reserved = await testHarness.controller.reserve({
+      scope,
+      idempotencyKey: token(1),
+    });
+    if (reserved.status !== "reserved") {
+      throw new Error("expected reservation");
+    }
+    const stateKey = store.keys[0];
+    if (!stateKey) {
+      throw new Error("expected state key");
+    }
+    const writeCount = store.writes.length;
+
+    await expect(
+      testHarness.controller.reconcileImmutableAcceptance({
+        stateKey,
+        reservationId: reserved.reservationId,
+      }),
+    ).resolves.toEqual({
+      status: "pending-reconciliation",
+      reservationId: reserved.reservationId,
+      leaseExpiredAtMs: reserved.leaseExpiresAtMs,
+      reconciliationUntilMs: reserved.leaseExpiresAtMs + 6 * DAY,
+    });
+    expect(store.writes).toHaveLength(writeCount);
+  });
+
+  it("expires a writing reservation at the exact reconciliation boundary without verifying content", async () => {
+    const store = new AtomicMemoryStore();
+    let verifierCalls = 0;
+    const testHarness = harness({
+      store,
+      acceptanceVerifier: {
+        hasImmutableAcceptance: async () => {
+          verifierCalls += 1;
+          return true;
+        },
+      },
+    });
+    const reserved = await testHarness.controller.reserve({
+      scope,
+      idempotencyKey: token(1),
+    });
+    if (reserved.status !== "reserved") {
+      throw new Error("expected reservation");
+    }
+    await testHarness.controller.beginImmutableWrite({
+      scope,
+      idempotencyKey: token(1),
+      reservationId: reserved.reservationId,
+      attemptGeneration: reserved.attemptGeneration,
+      attemptToken: reserved.attemptToken,
+    });
+    const stateKey = store.keys[0];
+    if (!stateKey) {
+      throw new Error("expected state key");
+    }
+    const reconciliationUntilMs = reserved.leaseExpiresAtMs + 6 * DAY;
+    testHarness.setNow(reconciliationUntilMs);
+
+    await expect(
+      testHarness.controller.reconcileImmutableAcceptance({
+        stateKey,
+        reservationId: reserved.reservationId,
+      }),
+    ).resolves.toEqual({
+      status: "expired",
+      reservationId: reserved.reservationId,
+      expiredAtMs: reconciliationUntilMs,
+    });
+    expect(verifierCalls).toBe(0);
+    expect(store.records.get(stateKey)?.state).toEqual({
+      schemaVersion: "1",
+      streak: 0,
+      reservations: [],
+      hardDeleteByMs: reconciliationUntilMs,
+    });
+    await expect(
+      testHarness.controller.reconcileImmutableAcceptance({
+        stateKey,
+        reservationId: reserved.reservationId,
+      }),
+    ).resolves.toEqual({ status: "reservation-not-found" });
+  });
+
+  it("expires deterministically when bounded verification crosses the reconciliation boundary", async () => {
+    const store = new AtomicMemoryStore();
+    let crossBoundary: (() => void) | undefined;
+    const testHarness = harness({
+      store,
+      acceptanceVerifier: {
+        hasImmutableAcceptance: async () => {
+          crossBoundary?.();
+          return true;
+        },
+      },
+    });
+    const reserved = await testHarness.controller.reserve({
+      scope,
+      idempotencyKey: token(1),
+    });
+    if (reserved.status !== "reserved") {
+      throw new Error("expected reservation");
+    }
+    const stateKey = store.keys[0];
+    if (!stateKey) {
+      throw new Error("expected state key");
+    }
+    const reconciliationUntilMs = reserved.leaseExpiresAtMs + 6 * DAY;
+    testHarness.setNow(reconciliationUntilMs - 1);
+    crossBoundary = () => testHarness.setNow(reconciliationUntilMs);
+
+    await expect(
+      testHarness.controller.reconcileImmutableAcceptance({
+        stateKey,
+        reservationId: reserved.reservationId,
+      }),
+    ).resolves.toEqual({
+      status: "expired",
+      reservationId: reserved.reservationId,
+      expiredAtMs: reconciliationUntilMs,
+    });
+  });
+
+  it("replays an already committed isolated reconciliation without consulting storage content", async () => {
+    const store = new AtomicMemoryStore();
+    let verifierCalls = 0;
+    const testHarness = harness({
+      store,
+      acceptanceVerifier: {
+        hasImmutableAcceptance: async ({ reservationId }) => {
+          verifierCalls += 1;
+          return verifierCalls === 1 && reservationId === RESERVATION_IDS[0];
+        },
+      },
+    });
+    const reserved = await testHarness.controller.reserve({
+      scope,
+      idempotencyKey: token(1),
+    });
+    if (reserved.status !== "reserved") {
+      throw new Error("expected reservation");
+    }
+    const committed = await testHarness.controller.commitAccepted({
+      scope,
+      idempotencyKey: token(1),
+      reservationId: reserved.reservationId,
+    });
+    expect(committed.status).toBe("committed");
+    const stateKey = store.keys[0];
+    if (!stateKey) {
+      throw new Error("expected state key");
+    }
+
+    const replay = await testHarness.controller.reconcileImmutableAcceptance({
+      stateKey,
+      reservationId: reserved.reservationId,
+    });
+
+    expect(replay).toEqual({ ...committed, replayed: true });
+    expect(verifierCalls).toBe(1);
+  });
+
+  it("rejects identity-bearing, malformed, accessor, and fake-signal reconciliation commands before I/O", async () => {
+    const store = new AtomicMemoryStore();
+    let verifierCalls = 0;
+    const testHarness = harness({
+      store,
+      acceptanceVerifier: {
+        hasImmutableAcceptance: async () => {
+          verifierCalls += 1;
+          return true;
+        },
+      },
+    });
+    const reserved = await testHarness.controller.reserve({
+      scope,
+      idempotencyKey: token(1),
+    });
+    if (reserved.status !== "reserved") {
+      throw new Error("expected reservation");
+    }
+    const stateKey = store.keys[0];
+    if (!stateKey) {
+      throw new Error("expected state key");
+    }
+    store.keys.length = 0;
+    const baselineWrites = store.writes.length;
+    let getterCalls = 0;
+    const accessorCommand = Object.defineProperty(
+      { reservationId: reserved.reservationId },
+      "stateKey",
+      {
+        enumerable: true,
+        get: () => {
+          getterCalls += 1;
+          return stateKey;
+        },
+      },
+    );
+    const badCommands: ReadonlyArray<[unknown, string]> = [
+      [
+        { stateKey: SUBJECT, reservationId: reserved.reservationId },
+        "invalid-state-key",
+      ],
+      [{ stateKey, reservationId: SUBJECT }, "invalid-reservation-id"],
+      [
+        {
+          stateKey,
+          reservationId: reserved.reservationId,
+          idempotencyKey: token(1),
+        },
+        "invalid-reconciliation-command",
+      ],
+      [
+        { stateKey, reservationId: reserved.reservationId, scope },
+        "invalid-reconciliation-command",
+      ],
+      [
+        {
+          stateKey,
+          reservationId: reserved.reservationId,
+          signal: { aborted: false },
+        },
+        "invalid-reconciliation-command",
+      ],
+      [accessorCommand, "invalid-reconciliation-command"],
+      [
+        new Proxy(
+          {},
+          {
+            getPrototypeOf: () => {
+              throw new Error(`identity ${SUBJECT}`);
+            },
+          },
+        ),
+        "invalid-reconciliation-command",
+      ],
+    ];
+
+    for (const [command, code] of badCommands) {
+      await expect(
+        testHarness.controller.reconcileImmutableAcceptance(command as never),
+      ).rejects.toMatchObject({
+        code,
+        name: "ProgressiveCooldownInputError",
+        message: "Invalid progressive cooldown input.",
+      });
+    }
+    expect(getterCalls).toBe(0);
+    expect(store.keys).toEqual([]);
+    expect(store.writes).toHaveLength(baselineWrites);
+    expect(verifierCalls).toBe(0);
+  });
+
+  it("converges concurrent identifier-isolated reconciliation to one commit", async () => {
+    const store = new AtomicMemoryStore();
+    const testHarness = harness({
+      store,
+      acceptanceVerifier: {
+        hasImmutableAcceptance: async () => true,
+      },
+    });
+    const reserved = await testHarness.controller.reserve({
+      scope,
+      idempotencyKey: token(1),
+    });
+    if (reserved.status !== "reserved") {
+      throw new Error("expected reservation");
+    }
+    const stateKey = store.keys[0];
+    if (!stateKey) {
+      throw new Error("expected state key");
+    }
+
+    const results = await Promise.all([
+      testHarness.controller.reconcileImmutableAcceptance({
+        stateKey,
+        reservationId: reserved.reservationId,
+      }),
+      testHarness.controller.reconcileImmutableAcceptance({
+        stateKey,
+        reservationId: reserved.reservationId,
+      }),
+    ]);
+
+    expect(results.map((result) => result.status)).toEqual([
+      "committed",
+      "committed",
+    ]);
+    expect(
+      results
+        .filter((result) => result.status === "committed")
+        .map((result) => result.replayed)
+        .sort(),
+    ).toEqual([false, true]);
+    expect(store.records.get(stateKey)?.state.streak).toBe(1);
+  });
+
+  it("fails isolated reconciliation closed without reflecting verifier failures", async () => {
+    const store = new AtomicMemoryStore();
+    const testHarness = harness({
+      store,
+      acceptanceVerifier: {
+        hasImmutableAcceptance: async () => {
+          throw new Error(`sensitive verifier value ${SUBJECT}`);
+        },
+      },
+    });
+    const reserved = await testHarness.controller.reserve({
+      scope,
+      idempotencyKey: token(1),
+    });
+    if (reserved.status !== "reserved") {
+      throw new Error("expected reservation");
+    }
+    const stateKey = store.keys[0];
+    if (!stateKey) {
+      throw new Error("expected state key");
+    }
+    const writeCount = store.writes.length;
+
+    await expect(
+      testHarness.controller.reconcileImmutableAcceptance({
+        stateKey,
+        reservationId: reserved.reservationId,
+      }),
+    ).resolves.toEqual({
+      status: "unavailable",
+      retryAtMs: START + 30_000,
+      retryAfterSeconds: 30,
+    });
+    expect(store.writes).toHaveLength(writeCount);
+  });
+
   it("fails closed for corrupt persisted state", async () => {
     const testHarness = harness({
       store: {

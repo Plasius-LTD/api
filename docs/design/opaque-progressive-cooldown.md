@@ -59,12 +59,15 @@ silently diverging while preserving valid custom policies for generic users.
 The reservation creator receives a generation and a random 128-bit `fba1`
 attempt token. Only its digest is persisted. Same-key replays receive a pending
 result and no token, so they cannot write or release on the owner's behalf.
-`beginImmutableWrite`, `commitAccepted`, and `release` are replay safe.
-Reconciliation workers use the
-same `commitAccepted` operation with the reservation details held in their
-identifier-isolated outbox. A released reservation may later be promoted to
-committed when immutable acceptance is discovered, preventing a cross-store race
-from losing cooldown state.
+`beginImmutableWrite`, `commitAccepted`, `release`, and
+`reconcileImmutableAcceptance` are replay safe. Request handlers use
+`commitAccepted` while they still hold scope and request-local idempotency.
+Reconciliation workers instead use only a canonical state key and reservation
+ID from their identifier-isolated outbox; they never retain or reconstruct the
+opaque subject, scope, idempotency key, packet locator, or write authority. A
+released reservation may later be promoted to committed when immutable
+acceptance is discovered, preventing a cross-store race from losing cooldown
+state.
 
 ## State machine
 

@@ -7,7 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 - **Added**
-  - (placeholder)
+  - Added identifier-isolated immutable-acceptance reconciliation by canonical
+    state key and reservation ID, allowing bounded outbox workers to converge
+    cooldown state without retaining an opaque subject, scope, idempotency key,
+    packet identifier, or write authority.
 
 - **Changed**
   - (placeholder)
@@ -16,7 +19,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - (placeholder)
 
 - **Security**
-  - (placeholder)
+  - Reconciliation commands are closed, accessor-free data objects and reject
+    identity-bearing fields, malformed identifiers, and forged cancellation
+    signals before any control-store or acceptance-verifier I/O.
 
 ## [1.1.1] - 2026-08-13
 

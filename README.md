@@ -154,6 +154,25 @@ database, or queue write. It atomically changes `reserved` to `writing`.
 the record is still `reserved`; once writing begins, an ambiguous provider
 outcome remains reconciliation-only and cannot be released by another request.
 
+A background reconciler must call `reconcileImmutableAcceptance` with only the
+canonical `fbs1` state key and `fbr1` reservation ID stored in its isolated
+outbox. The command intentionally has no scope, opaque subject, idempotency key,
+packet locator, or attempt authority. It replays a committed result without
+probing content, verifies unresolved acceptance under the controller deadline,
+and conditionally commits through the same cooldown transition as the request
+path. An absent acceptance remains pending before its fixed boundary; at that
+boundary the stale control record is pruned without creating or releasing
+content. A verification that crosses the fixed boundary expires rather than
+extending the configured reconciliation lifetime.
+
+```ts
+const reconciliation = await cooldowns.reconcileImmutableAcceptance({
+  stateKey: outbox.stateId,
+  reservationId: outbox.reservationId,
+  signal,
+});
+```
+
 Consumers must:
 
 - evaluate their remotely controlled Feature flag before creating reservations;
@@ -183,6 +202,8 @@ Store/verifier outages and corrupt state fail closed with a bounded, non-reflect
 [ADR-0008](./docs/adrs/adr-0008-opaque-progressive-cooldown-reservations.md),
 as tightened by
 [ADR-0010](./docs/adrs/adr-0010-owner-bound-immutable-write-admission.md).
+Identifier-isolated background convergence is specified by
+[ADR-0011](./docs/adrs/adr-0011-identifier-isolated-acceptance-reconciliation.md).
 Persisted leases, cooldowns, six-day default reconciliation retention, and the
 following fixed 24-hour deletion/backup safety window are exact: shorter,
 longer, overflowing, non-canonical, future-event, or temporally regressive
