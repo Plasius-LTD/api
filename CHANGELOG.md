@@ -16,6 +16,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - Replaced duplicated inline release-version evaluators with one tested,
     fail-closed parser so release preparation and immutable publication derive
     stable and prerelease distribution tags identically.
+  - Made immutable tarball `dist` verification consume the complete member
+    inventory without an early-closing pipeline, preventing `pipefail` from
+    rejecting valid release bundles after `tar` receives a broken pipe.
 
 - **Security**
   - (placeholder)

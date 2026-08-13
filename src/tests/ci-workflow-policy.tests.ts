@@ -86,6 +86,15 @@ describe("release workflow trust boundaries", () => {
     expect(publishJob).not.toContain("npm run ");
   });
 
+  it("verifies dist members without a pipefail-sensitive early reader", () => {
+    expect(cdWorkflow).toContain('HAS_DIST_MEMBER="false"');
+    expect(cdWorkflow).toContain('HAS_DIST_MEMBER="true"');
+    expect(cdWorkflow).toContain('[ "${HAS_DIST_MEMBER}" != "true" ]');
+    expect(cdWorkflow).not.toMatch(
+      /tar -tzf "\$\{TARBALL\}" \| grep -E?q '\^package\/dist/gu,
+    );
+  });
+
   it("lands release metadata through a unique non-force-pushed pull request", () => {
     const checkoutMain = releasePrepareWorkflow.slice(
       releasePrepareWorkflow.indexOf("- name: Checkout main"),

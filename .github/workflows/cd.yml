@@ -606,6 +606,7 @@ jobs:
           done
           jq -e . "${SBOM}" >/dev/null
 
+          HAS_DIST_MEMBER="false"
           while IFS= read -r MEMBER; do
             case "${MEMBER}" in
               package | package/*) ;;
@@ -617,8 +618,13 @@ jobs:
             case "${MEMBER}" in
               /* | ../* | */../* | */..)
                 echo "Unsafe package traversal member: ${MEMBER}" >&2
-              exit 1
+                exit 1
               ;;
+            esac
+            case "${MEMBER}" in
+              package/dist | package/dist/*)
+                HAS_DIST_MEMBER="true"
+                ;;
             esac
           done < <(tar -tzf "${TARBALL}")
 
@@ -652,7 +658,7 @@ jobs:
             exit 1
           fi
 
-          if ! tar -tzf "${TARBALL}" | grep -Eq '^package/dist(/|$)'; then
+          if [ "${HAS_DIST_MEMBER}" != "true" ]; then
             echo "Package tarball is missing built dist output." >&2
             exit 1
           fi
