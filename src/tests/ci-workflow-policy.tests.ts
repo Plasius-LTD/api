@@ -82,6 +82,15 @@ describe("release workflow trust boundaries", () => {
   });
 
   it("lands release metadata through a unique non-force-pushed pull request", () => {
+    const checkoutMain = releasePrepareWorkflow.slice(
+      releasePrepareWorkflow.indexOf("- name: Checkout main"),
+      releasePrepareWorkflow.indexOf("- name: Create release-prep GitHub App token"),
+    );
+
+    expect(checkoutMain).toContain("persist-credentials: false");
+    expect(releasePrepareWorkflow).toContain(
+      'git remote set-url origin "https://x-access-token:${AUTH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"',
+    );
     expect(releasePrepareWorkflow).toContain(
       'BRANCH="release/${TAG}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
     );
