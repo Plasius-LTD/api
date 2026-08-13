@@ -7,6 +7,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 - **Added**
+  - (placeholder)
+
+- **Changed**
+  - (placeholder)
+
+- **Fixed**
+  - (placeholder)
+
+- **Security**
+  - (placeholder)
+
+## [1.1.0] - 2026-08-13
+
+- **Added**
   - Added storage-agnostic opaque progressive-cooldown controls with atomic compare-and-swap reservations, immutable-acceptance verification, idempotent commit/release, bounded reconciliation and dependency deadlines, caller cancellation, exact retry timing, deterministic runtime dependencies, monotonic commit timestamps, and the default 5m → 15m → 1h → 6h → 24h ladder.
   - Added the `@plasius/api/progressive-cooldown` public entrypoint and control-store contracts.
   - Added immutable, versioned progressive-cooldown policy attestations with a
@@ -329,7 +343,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Initial public release scaffold for `@plasius/api`.
 
-[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.0.21...HEAD
+[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.1.0...HEAD
 [1.0.0]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.0
 [1.0.1]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.1
 [1.0.2]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.2
@@ -348,3 +362,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [1.0.19]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.19
 [1.0.20]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.20
 [1.0.21]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.21
+[1.1.0]: https://github.com/Plasius-LTD/api/releases/tag/v1.1.0
