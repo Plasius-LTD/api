@@ -95,6 +95,15 @@ describe("release workflow trust boundaries", () => {
     );
   });
 
+  it("publishes the immutable tarball as an explicit local package spec", () => {
+    expect(cdWorkflow).toContain(
+      'npm publish "./${TARBALL}" --ignore-scripts "${PUBLISH_ARGS[@]}"',
+    );
+    expect(cdWorkflow).not.toContain(
+      'npm publish "${TARBALL}" --ignore-scripts "${PUBLISH_ARGS[@]}"',
+    );
+  });
+
   it("lands release metadata through a unique non-force-pushed pull request", () => {
     const checkoutMain = releasePrepareWorkflow.slice(
       releasePrepareWorkflow.indexOf("- name: Checkout main"),

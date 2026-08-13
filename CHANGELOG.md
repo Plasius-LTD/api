@@ -19,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - Made immutable tarball `dist` verification consume the complete member
     inventory without an early-closing pipeline, preventing `pipefail` from
     rejecting valid release bundles after `tar` receives a broken pipe.
+  - Pass the immutable tarball to npm as an explicit local package spec so npm
+    does not reinterpret the workspace-relative artifact path as a Git target.
 
 - **Security**
   - (placeholder)
