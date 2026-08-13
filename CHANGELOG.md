@@ -13,6 +13,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - (placeholder)
 
 - **Fixed**
+  - (placeholder)
+
+- **Security**
+  - (placeholder)
+
+## [1.1.1] - 2026-08-13
+
+- **Added**
+  - (placeholder)
+
+- **Changed**
+  - (placeholder)
+
+- **Fixed**
   - Replaced duplicated inline release-version evaluators with one tested,
     fail-closed parser so release preparation and immutable publication derive
     stable and prerelease distribution tags identically.
@@ -353,7 +367,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Initial public release scaffold for `@plasius/api`.
 
-[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.1.1...HEAD
 [1.0.0]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.0
 [1.0.1]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.1
 [1.0.2]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.2
@@ -373,3 +387,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [1.0.20]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.20
 [1.0.21]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.21
 [1.1.0]: https://github.com/Plasius-LTD/api/releases/tag/v1.1.0
+[1.1.1]: https://github.com/Plasius-LTD/api/releases/tag/v1.1.1
