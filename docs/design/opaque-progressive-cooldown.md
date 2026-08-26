@@ -47,6 +47,12 @@ The controller exposes:
 4. `commitAccepted` after the verifier confirms immutable acceptance;
 5. `release` by the matching owner while the record is still `reserved`.
 
+It also exports `deriveOpaqueProgressiveCooldownStateKey`. The helper applies
+the same closed scope validator and exact one-way derivation as the controller,
+allowing an authorised store adapter to address a companion policy record
+without copying key derivation. The projected key remains pseudonymous control
+data and must not be returned to clients, logs, reports, Admin, or MCP.
+
 It also exposes an immutable `policyAttestation` with a versioned deterministic
 SHA-256 fingerprint over every resolved policy field. This is a compatibility
 fingerprint, not a signature. Consumers that persist their own reconciliation
@@ -93,9 +99,13 @@ available -> reserved -> writing -> committed -> cooldown -> available
   bounded reconciliation period.
 - Commit is impossible unless the injected verifier confirms an immutable
   acceptance.
-- Every accepted transition uses a clock value observed after verification and
-  the latest state read. Its commit time and cooldown may never move backwards,
-  including when delayed reconciliation races a newer commit.
+- Every immutable packet carries the server-owned reservation timestamp as its
+  acceptance time. The verifier must compare that exact value before commit.
+- A control transition records its later commit time for ordering and quiet
+  reset, while the individual cooldown expires at `reservedAt + ladder rung`.
+  This means reconciliation cannot extend suppression merely because evidence
+  was confirmed late. The aggregate retains the latest cooldown maximum when
+  concurrent or delayed commits complete out of order.
 - Store, verifier, corrupt-state, and repeated compare-and-swap failures deny the
   operation with a bounded retry response.
 
@@ -170,7 +180,7 @@ matches the policy exactly:
 - reservation leases equal `reservedAt + reservationLease`;
 - reserved retention equals `lease expiry + retention`;
 - released retention equals `releasedAt + retention`;
-- committed cooldowns equal their exact ladder rung;
+- committed cooldowns equal `reservedAt +` their exact ladder rung;
 - committed retention equals `committedAt + quiet reset + retention`;
 - zero-streak state may retain committed reconciliation history only at or after
   the exact quiet-reset boundary;
@@ -201,6 +211,10 @@ Tests cover:
 - release/acceptance reconciliation;
 - expired reservation reconciliation;
 - held-verifier reconciliation racing a newer capped commit;
+- exact reservation-time acceptance proof across non-zero write latency and
+  late reconciliation;
+- package-owned state-key projection with the same closed scope validation as
+  controller operations;
 - exact lease, release, commit, cooldown, reconciliation, hard-delete,
   overflow, and clock-regression boundaries;
 - forged retained commit histories that skip, regress, or reset ladder rungs;

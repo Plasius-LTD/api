@@ -92,6 +92,8 @@ from the configured controller dependency.
 import {
   DEFAULT_PROGRESSIVE_COOLDOWN_POLICY_ATTESTATION,
   OpaqueProgressiveCooldownController,
+  PROGRESSIVE_COOLDOWN_ACCEPTANCE_ANCHOR_VERSION,
+  deriveOpaqueProgressiveCooldownStateKey,
   isProgressiveCooldownPolicyAttestation,
   type ImmutableAcceptanceVerifier,
   type ProgressiveCooldownStore,
@@ -104,6 +106,10 @@ const cooldowns = new OpaqueProgressiveCooldownController({
   store,
   acceptanceVerifier,
 });
+
+if (PROGRESSIVE_COOLDOWN_ACCEPTANCE_ANCHOR_VERSION !== "reservation-v1") {
+  throw new Error("Unsupported progressive-cooldown acceptance anchor.");
+}
 
 if (
   !isProgressiveCooldownPolicyAttestation(cooldowns.policyAttestation) ||
@@ -139,6 +145,14 @@ if (reservation.status === "reserved") {
     // Invoke conditional immutable storage only from this branch.
   }
 }
+
+// Isolated control-store adapters may address companion policy state without
+// copying the package-owned derivation. Never return or log this key.
+const stateKey = deriveOpaqueProgressiveCooldownStateKey({
+  purpose: "submission.bug",
+  version: "v1",
+  opaqueSubjectKey: purposeScopedKeyedPseudonym,
+});
 ```
 
 The raw `attemptToken` is one-use control authority returned only to the
@@ -164,6 +178,13 @@ path. An absent acceptance remains pending before its fixed boundary; at that
 boundary the stale control record is pruned without creating or releasing
 content. A verification that crosses the fixed boundary expires rather than
 extending the configured reconciliation lifetime.
+
+The immutable packet must carry the exact server-owned reservation time passed
+to `ImmutableAcceptanceVerifier` as `acceptedAtMs`. A successful result exposes
+the same value separately from the later `committedAtMs` transition. Individual
+cooldown expiry is anchored to acceptance time, so write latency or delayed
+reconciliation cannot extend user suppression; the aggregate still keeps the
+maximum expiry across out-of-order commits.
 
 ```ts
 const reconciliation = await cooldowns.reconcileImmutableAcceptance({
@@ -204,6 +225,9 @@ as tightened by
 [ADR-0010](./docs/adrs/adr-0010-owner-bound-immutable-write-admission.md).
 Identifier-isolated background convergence is specified by
 [ADR-0011](./docs/adrs/adr-0011-identifier-isolated-acceptance-reconciliation.md).
+Reservation-time acceptance and the package-owned state-key projection are
+specified by
+[ADR-0012](./docs/adrs/adr-0012-anchor-acceptance-to-reservation-time.md).
 Persisted leases, cooldowns, six-day default reconciliation retention, and the
 following fixed 24-hour deletion/backup safety window are exact: shorter,
 longer, overflowing, non-canonical, future-event, or temporally regressive

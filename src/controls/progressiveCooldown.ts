@@ -8,6 +8,9 @@ const DAY_MS = 24 * HOUR_MS;
 export const MAX_PROGRESSIVE_COOLDOWN_MS = DAY_MS;
 /** Reserved for verified deletion and isolated-control backup expiry. */
 export const PROGRESSIVE_COOLDOWN_PURGE_SAFETY_MS = DAY_MS;
+/** Runtime-attestable contract for server-owned reservation-time acceptance. */
+export const PROGRESSIVE_COOLDOWN_ACCEPTANCE_ANCHOR_VERSION =
+  "reservation-v1" as const;
 
 export interface ProgressiveCooldownPolicy {
   readonly cooldownLadderMs: readonly number[];
@@ -172,6 +175,12 @@ export interface ImmutableAcceptanceVerifier {
      */
     readonly stateKey: string;
     readonly reservationId: string;
+    /**
+     * Server-owned time the immutable packet must carry. The verifier must
+     * compare this exact value with the validated packet and must never
+     * substitute a client timestamp.
+     */
+    readonly acceptedAtMs: number;
     readonly signal: AbortSignal;
     readonly deadlineAtMs: number;
   }): Promise<boolean>;
@@ -299,6 +308,9 @@ export interface ProgressiveCooldownCommittedResult {
   readonly status: "committed";
   readonly replayed: boolean;
   readonly reservationId: string;
+  /** Server-owned immutable-packet time, anchored to the reservation. */
+  readonly acceptedAtMs: number;
+  /** Later control-store transition time retained for audit/order semantics. */
   readonly committedAtMs: number;
   readonly streak: number;
   readonly cooldownDurationMs: number;
@@ -928,6 +940,7 @@ export class OpaqueProgressiveCooldownController {
       if (existingSnapshot === "unavailable") {
         return this.#unavailable(nowMs);
       }
+      let acceptedAtMs: number;
       if (existingSnapshot) {
         const decisionNowMs = this.#getNow();
         if (decisionNowMs === null) {
@@ -953,6 +966,7 @@ export class OpaqueProgressiveCooldownController {
         if (existingRecord.status === "committed") {
           return committedResult(existingRecord, true);
         }
+        acceptedAtMs = existingRecord.reservedAtMs;
       } else {
         return { status: "reservation-not-found" };
       }
@@ -967,6 +981,7 @@ export class OpaqueProgressiveCooldownController {
             this.#acceptanceVerifier.hasImmutableAcceptance({
               stateKey,
               reservationId,
+              acceptedAtMs,
               signal: operation.signal,
               deadlineAtMs: operation.deadlineAtMs,
             }),
@@ -1071,6 +1086,7 @@ export class OpaqueProgressiveCooldownController {
             this.#acceptanceVerifier.hasImmutableAcceptance({
               stateKey,
               reservationId,
+              acceptedAtMs: existingRecord.reservedAtMs,
               signal: operation.signal,
               deadlineAtMs: operation.deadlineAtMs,
             }),
@@ -1262,7 +1278,7 @@ export class OpaqueProgressiveCooldownController {
       return { result: this.#unavailable(mutationNowMs) };
     }
     const cooldownUntilMs = addTimestamp(
-      mutationNowMs,
+      record.reservedAtMs,
       cooldownDurationMs,
     );
     const quietResetAtMs = addTimestamp(
@@ -1295,7 +1311,10 @@ export class OpaqueProgressiveCooldownController {
     delete record.releasedAtMs;
     state.streak = nextStreak;
     state.lastCommittedAtMs = mutationNowMs;
-    state.cooldownUntilMs = cooldownUntilMs;
+    state.cooldownUntilMs = Math.max(
+      state.cooldownUntilMs ?? cooldownUntilMs,
+      cooldownUntilMs,
+    );
     const hardDeleteByMs = calculateHardDeleteBy(
       state,
       mutationNowMs,
@@ -1600,6 +1619,17 @@ function isCanonicalStateKey(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Projects the canonical isolated control-state key for a validated scope.
+ * This lets a store adapter address companion policy state without copying
+ * the package-owned derivation or accepting raw account identifiers.
+ */
+export function deriveOpaqueProgressiveCooldownStateKey(
+  scope: ProgressiveCooldownScope,
+): string {
+  return deriveStateKey(validateScope(scope));
 }
 
 function deriveStateKey(scope: ProgressiveCooldownScope): string {
@@ -2127,6 +2157,7 @@ function committedResult(
     status: "committed",
     replayed,
     reservationId: record.reservationId,
+    acceptedAtMs: record.reservedAtMs,
     committedAtMs: record.committedAtMs,
     streak: record.committedStreak,
     cooldownDurationMs: record.cooldownDurationMs,
@@ -2239,8 +2270,7 @@ function parseState(
       (lastCommittedAtMs !== undefined || cooldownUntilMs !== undefined)) ||
     (streak > 0 &&
       (lastCommittedAtMs === undefined ||
-        cooldownUntilMs === undefined ||
-        cooldownUntilMs < lastCommittedAtMs)) ||
+        cooldownUntilMs === undefined)) ||
     (lastCommittedAtMs !== undefined && lastCommittedAtMs > nowMs)
   ) {
     return null;
@@ -2282,11 +2312,23 @@ function parseState(
     if (lastCommittedAtMs === undefined) {
       return null;
     }
+    const maximumCommittedCooldownUntilMs = Math.max(
+      ...reservations
+        .filter(
+          (record): record is ParsedCommittedReservationRecord =>
+            record.status === "committed" &&
+            record.committedAtMs !== undefined &&
+            record.committedStreak !== undefined &&
+            record.cooldownDurationMs !== undefined &&
+            record.cooldownUntilMs !== undefined,
+        )
+        .map((record) => record.cooldownUntilMs),
+    );
     if (
       !latestCommittedRecord ||
       latestCommittedRecord.committedAtMs !== lastCommittedAtMs ||
       latestCommittedRecord.committedStreak !== streak ||
-      latestCommittedRecord.cooldownUntilMs !== cooldownUntilMs
+      maximumCommittedCooldownUntilMs !== cooldownUntilMs
     ) {
       return null;
     }
@@ -2509,7 +2551,7 @@ function parseReservation(
         policy.cooldownLadderMs[(input.committedStreak as number) - 1] ||
       !isTimestamp(input.cooldownUntilMs) ||
       input.cooldownUntilMs !==
-        addTimestamp(input.committedAtMs, input.cooldownDurationMs) ||
+        addTimestamp(input.reservedAtMs, input.cooldownDurationMs) ||
       expectedRetainUntilMs === null ||
       input.reconciliationUntilMs !== expectedRetainUntilMs ||
       input.releasedAtMs !== undefined

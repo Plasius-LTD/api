@@ -41,8 +41,9 @@ Provide a purpose/version-scoped opaque reservation controller with:
 - a six-day default reconciliation horizon followed by a fixed 24-hour
   deletion/backup safety window, with live deletion starting at the boundary
   and total removal required within seven days;
-- exact, non-extendable temporal/retention invariants, monotonic commit times,
-  and validated retained ladder history;
+- exact, non-extendable temporal/retention invariants, reservation-anchored
+  cooldowns, monotonic control commit times, and validated retained ladder
+  history;
 - closed fail-safe results with no input or dependency-error reflection.
 
 The consumer supplies its remote Feature flag, keyed-pseudonym derivation,
@@ -101,9 +102,9 @@ only storage primitive it requires.
   privacy and retention boundary.
 - Store adapters must coordinate live TTL, soft deletion, and backup expiry
   against both the reconciliation boundary and hard-delete deadline.
-- A delayed reconciliation commit conservatively starts its cooldown when the
-  acceptance is confirmed, which can extend suppression by the reconciliation
-  delay.
+- Reservation time is the immutable packet's server-owned acceptance anchor.
+  Consumers must preserve and verify it exactly; packet acceptance remains the
+  prerequisite for creating any cooldown state.
 - The policy fingerprint is not an authentication signature; consumers must
   obtain the attestation from their configured controller dependency and pin an
   explicitly supported fingerprint at their own trust boundary.

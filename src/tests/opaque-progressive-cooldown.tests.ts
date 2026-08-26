@@ -5,9 +5,11 @@ import {
   DEFAULT_PROGRESSIVE_COOLDOWN_POLICY_ATTESTATION,
   MAX_PROGRESSIVE_COOLDOWN_MS,
   OpaqueProgressiveCooldownController,
+  PROGRESSIVE_COOLDOWN_ACCEPTANCE_ANCHOR_VERSION,
   PROGRESSIVE_COOLDOWN_PURGE_SAFETY_MS,
   ProgressiveCooldownInputError,
   attestProgressiveCooldownPolicy,
+  deriveOpaqueProgressiveCooldownStateKey,
   isProgressiveCooldownPolicyAttestation,
   type ImmutableAcceptanceVerifier,
   type ProgressiveCooldownReservationRecord,
@@ -214,6 +216,9 @@ async function reserveAndAccept(
 
 describe("OpaqueProgressiveCooldownController", () => {
   it("publishes the exact default ladder and hard cap", () => {
+    expect(PROGRESSIVE_COOLDOWN_ACCEPTANCE_ANCHOR_VERSION).toBe(
+      "reservation-v1",
+    );
     expect(DEFAULT_PROGRESSIVE_COOLDOWN_POLICY.cooldownLadderMs).toEqual([
       5 * MINUTE,
       15 * MINUTE,
@@ -633,10 +638,99 @@ describe("OpaqueProgressiveCooldownController", () => {
       expect(committed.streak).toBe(Math.min(index + 1, 5));
       expect(committed.cooldownDurationMs).toBe(durationMs);
       expect(committed.cooldownUntilMs).toBe(
-        committed.committedAtMs + durationMs,
+        committed.acceptedAtMs + durationMs,
       );
       testHarness.setNow(committed.cooldownUntilMs);
     }
+  });
+
+  it("anchors acceptance and cooldown to the stored reservation across non-zero write latency", async () => {
+    let verifiedAcceptedAtMs: number | undefined;
+    const testHarness = harness({
+      acceptanceVerifier: {
+        hasImmutableAcceptance: async ({ acceptedAtMs }) => {
+          verifiedAcceptedAtMs = acceptedAtMs;
+          return true;
+        },
+      },
+    });
+    const reserved = await testHarness.controller.reserve({
+      scope,
+      idempotencyKey: token(1),
+    });
+    if (reserved.status !== "reserved") {
+      throw new Error("expected reservation");
+    }
+
+    testHarness.advance(12_345);
+    const committed = await testHarness.controller.commitAccepted({
+      scope,
+      idempotencyKey: token(1),
+      reservationId: reserved.reservationId,
+    });
+    if (committed.status !== "committed") {
+      throw new Error("expected commit");
+    }
+
+    expect(verifiedAcceptedAtMs).toBe(reserved.reservedAtMs);
+    expect(committed.acceptedAtMs).toBe(reserved.reservedAtMs);
+    expect(committed.committedAtMs).toBe(START + 12_345);
+    expect(committed.committedAtMs).toBeGreaterThan(committed.acceptedAtMs);
+    expect(committed.cooldownUntilMs).toBe(
+      committed.acceptedAtMs + committed.cooldownDurationMs,
+    );
+
+    testHarness.advance(2_000);
+    await expect(
+      testHarness.controller.commitAccepted({
+        scope,
+        idempotencyKey: token(1),
+        reservationId: reserved.reservationId,
+      }),
+    ).resolves.toEqual({ ...committed, replayed: true });
+  });
+
+  it("keeps late reconciliation acceptance anchored to the original reservation", async () => {
+    const testHarness = harness({
+      acceptanceVerifier: {
+        hasImmutableAcceptance: async () => true,
+      },
+    });
+    const reserved = await testHarness.controller.reserve({
+      scope,
+      idempotencyKey: token(1),
+    });
+    if (reserved.status !== "reserved") {
+      throw new Error("expected reservation");
+    }
+    const released = await testHarness.controller.release({
+      scope,
+      idempotencyKey: token(1),
+      reservationId: reserved.reservationId,
+      attemptGeneration: reserved.attemptGeneration,
+      attemptToken: reserved.attemptToken,
+    });
+    expect(released.status).toBe("released");
+
+    testHarness.advance(DAY);
+    const reconciled = await testHarness.controller.reconcileImmutableAcceptance({
+      stateKey: (testHarness.store as AtomicMemoryStore).keys[0] ?? "",
+      reservationId: reserved.reservationId,
+    });
+    if (reconciled.status !== "committed") {
+      throw new Error("expected reconciled commit");
+    }
+
+    expect(reconciled.acceptedAtMs).toBe(reserved.reservedAtMs);
+    expect(reconciled.committedAtMs).toBe(START + DAY);
+    expect(reconciled.cooldownUntilMs).toBe(
+      reserved.reservedAtMs + reconciled.cooldownDurationMs,
+    );
+    expect(reconciled.cooldownUntilMs).toBeLessThan(reconciled.committedAtMs);
+    await expect(testHarness.controller.getEligibility({ scope })).resolves.toEqual({
+      status: "available",
+      streak: 1,
+    });
   });
 
   it("never regresses a capped cooldown when delayed reconciliation commits last", async () => {
@@ -715,13 +809,16 @@ describe("OpaqueProgressiveCooldownController", () => {
     expect(reconciledCommit.committedAtMs).toBeGreaterThanOrEqual(
       laterCommit.committedAtMs,
     );
-    expect(reconciledCommit.cooldownUntilMs).toBeGreaterThanOrEqual(
+    expect(reconciledCommit.cooldownUntilMs).toBe(
+      reconciledCommit.acceptedAtMs + reconciledCommit.cooldownDurationMs,
+    );
+    expect(reconciledCommit.cooldownUntilMs).toBeLessThan(
       laterCommit.cooldownUntilMs,
     );
 
     const state = (testHarness.store as AtomicMemoryStore).writes.at(-1);
     expect(state?.lastCommittedAtMs).toBe(reconciledCommit.committedAtMs);
-    expect(state?.cooldownUntilMs).toBe(reconciledCommit.cooldownUntilMs);
+    expect(state?.cooldownUntilMs).toBe(laterCommit.cooldownUntilMs);
   });
 
   it("fails closed when the clock moves behind persisted control events", async () => {
@@ -1446,6 +1543,53 @@ describe("OpaqueProgressiveCooldownController", () => {
     expect(new Set(keys).size).toBe(3);
   });
 
+  it("projects the exact canonical state key used by the controller", async () => {
+    const testHarness = harness();
+    const projected = deriveOpaqueProgressiveCooldownStateKey(scope);
+
+    expect(projected).toMatch(
+      /^fbs1\.[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u,
+    );
+    expect(deriveOpaqueProgressiveCooldownStateKey(scope)).toBe(projected);
+    expect(
+      deriveOpaqueProgressiveCooldownStateKey({
+        ...scope,
+        purpose: "submission.review",
+      }),
+    ).not.toBe(projected);
+
+    await testHarness.controller.getEligibility({ scope });
+    expect((testHarness.store as AtomicMemoryStore).keys[0]).toBe(projected);
+  });
+
+  it("applies the closed scope validator before projecting a state key", () => {
+    const unsafe = "person@example.com";
+
+    expect(() =>
+      deriveOpaqueProgressiveCooldownStateKey({
+        ...scope,
+        opaqueSubjectKey: unsafe,
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        name: "ProgressiveCooldownInputError",
+        code: "invalid-opaque-subject",
+        message: "Invalid progressive cooldown input.",
+      }),
+    );
+    expect(() =>
+      deriveOpaqueProgressiveCooldownStateKey({
+        ...scope,
+        extra: unsafe,
+      } as typeof scope),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "invalid-opaque-subject",
+        message: "Invalid progressive cooldown input.",
+      }),
+    );
+  });
+
   it.each([
     ["raw account ID", "user-123"],
     ["email", "person@example.com"],
@@ -1905,6 +2049,7 @@ describe("OpaqueProgressiveCooldownController", () => {
     });
     expect(verifierCalls[0]?.signal).toBeInstanceOf(AbortSignal);
     expect(Object.keys(verifierCalls[0] ?? {}).sort()).toEqual([
+      "acceptedAtMs",
       "deadlineAtMs",
       "reservationId",
       "signal",
