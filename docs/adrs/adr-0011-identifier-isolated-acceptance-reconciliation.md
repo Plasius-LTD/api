@@ -28,9 +28,11 @@ It rejects additional, accessor-backed, identity-bearing, or malformed input
 before I/O. The controller reads only the named aggregate. A committed record is
 an exact replay and does not probe storage. Before the fixed reconciliation
 boundary, the injected immutable-acceptance verifier receives only the same two
-identifiers plus the controller-owned signal and deadline. Verified acceptance
-uses the same compare-and-swap cooldown transition as the request path. Missing
-acceptance remains pending without mutation.
+identifiers, the server-owned reservation acceptance time, and the
+controller-owned signal and deadline. The verifier must compare that time
+exactly with the validated immutable packet. Verified acceptance uses the same
+compare-and-swap cooldown transition as the request path. Missing acceptance
+remains pending without mutation.
 
 At or after the boundary, a record is pruned and returns `expired`, including
 when a bounded verifier call crosses that boundary. This preserves the exact

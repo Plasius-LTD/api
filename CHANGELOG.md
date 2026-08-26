@@ -7,16 +7,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 - **Added**
-  - (placeholder)
+  - Added an exact, closed `deriveOpaqueProgressiveCooldownStateKey` projection
+    for authorised control-store adapters and a runtime acceptance-anchor
+    compatibility marker.
 
 - **Changed**
-  - (placeholder)
+  - Immutable-acceptance verification now receives the exact server-owned
+    reservation timestamp, committed results expose it separately from the
+    later control transition, and cooldown expiry is anchored to that acceptance
+    time.
 
 - **Fixed**
-  - (placeholder)
+  - Prevented storage latency and delayed reconciliation from lengthening a
+    user's declared cooldown while preserving non-regressing aggregate expiry
+    across out-of-order commits.
 
 - **Security**
-  - (placeholder)
+  - Kept companion eligibility lookup inside the package-owned, validated
+    one-way state-key boundary instead of requiring consumers to duplicate
+    pseudonymous identifier derivation.
 
 ## [1.2.0] - 2026-08-13
 
