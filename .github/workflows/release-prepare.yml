@@ -223,7 +223,7 @@ jobs:
 
           CURRENT_TAG="${TAG_PREFIX}${CURRENT_VER}"
           CURRENT_COMMIT="$(git rev-parse HEAD)"
-          CURRENT_TAG_SHA="$(git rev-parse "${CURRENT_TAG}^{commit}" 2>/dev/null || true)"
+          CURRENT_TAG_SHA="$(git rev-parse --verify "${CURRENT_TAG}^{commit}" 2>/dev/null || true)"
           if npm view "${NAME}@${CURRENT_VER}" version >/dev/null 2>&1; then
             CURRENT_PUBLISHED="true"
           else
