@@ -31,9 +31,9 @@ describe("release workflow trust boundaries", () => {
     ).toHaveLength(2);
     expect(
       ciWorkflow.match(
-        /runs-on: \$\{\{ fromJSON\(github\.event_name == 'pull_request' && '\["ubuntu-latest"\]' \|\| '\["self-hosted","Linux","X64"\]'\) \}\}/gu,
+        /runs-on: ubuntu-latest/gu,
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
   });
 
   it("binds a second publication run to the prepared main SHA and successful CI", () => {
