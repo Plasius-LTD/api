@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+- **Added**
+  - (placeholder)
+
+- **Changed**
+  - (placeholder)
+
+- **Fixed**
+  - (placeholder)
+
+- **Security**
+  - (placeholder)
+
+## [1.2.5] - 2026-10-11
+
 - Refresh npm dependency lockfile to current supported stable versions (weekly maintenance, 2026-10-11). Refresh published Plasius package baselines after upstream releases.
 
 - **Added**
@@ -457,7 +471,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Initial public release scaffold for `@plasius/api`.
 
-[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.2.4...HEAD
+[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.2.5...HEAD
 [1.0.0]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.0
 [1.0.1]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.1
 [1.0.2]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.2
@@ -483,3 +497,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [1.2.2]: https://github.com/Plasius-LTD/api/releases/tag/v1.2.2
 [1.2.3]: https://github.com/Plasius-LTD/api/releases/tag/v1.2.3
 [1.2.4]: https://github.com/Plasius-LTD/api/releases/tag/v1.2.4
+[1.2.5]: https://github.com/Plasius-LTD/api/releases/tag/v1.2.5
