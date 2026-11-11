@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 - **Added**
-  - (placeholder)
+  - Opt-in shared rate-limit counters with fixed route scopes, verified-principal bucketing and bounded fail-closed admission.
 
 - **Changed**
   - (placeholder)
