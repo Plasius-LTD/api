@@ -8,12 +8,43 @@ export interface RateLimitConfig {
   windowMs: number;
 }
 
+export type SharedRateLimitCounterResult =
+  | { readonly status: "allowed"; readonly remaining: number }
+  | { readonly status: "exhausted" }
+  | { readonly status: "unavailable" };
+
+export interface SharedRateLimitCounter {
+  /**
+   * Atomically consume one permit for this window, across all replicas. The
+   * opaque bucket is already unique to the window. Never start a new window
+   * from a late request or retry an ambiguous write. Return "exhausted" only
+   * when the configured quota is known to be used up.
+   */
+  consume(input: {
+    readonly bucket: string;
+    readonly windowEndsAtMs: number;
+    readonly limit: number;
+  }, signal: AbortSignal): Promise<SharedRateLimitCounterResult>;
+}
+
+export interface SharedRateLimitConfig {
+  readonly store: SharedRateLimitCounter;
+  /** Static namespace shared by callers that should use the same quota. */
+  readonly namespace: string;
+  /** Static operation key, required if perApi is configured. */
+  readonly routeKey?: string;
+  /** One deadline for all scopes; defaults to 1500 ms. */
+  readonly timeoutMs?: number;
+}
+
 export interface ApiRateLimiterConfig {
   global?: RateLimitConfig;
   perUser?: RateLimitConfig;
   perApi?: RateLimitConfig;
   trustProxyHeaders?: boolean;
   failOpen?: boolean;
+  /** Opt-in, fail-closed backend. perUser requires a trusted context principal. */
+  sharedCounter?: SharedRateLimitConfig;
 }
 
 const redisUrl = process.env.REDIS_URL?.trim();
@@ -231,7 +262,122 @@ function rateLimitBody(result: { unavailable?: boolean }, limitedBody: string): 
     : limitedBody;
 }
 
+const SHARED_SCOPE_NAME = /^[a-z][a-z0-9-]{0,63}$/u;
+const SHARED_LIMIT_MESSAGE = {
+  global: "Server is busy (global limit). Please retry later.",
+  user: "You are sending requests too fast (user limit). Please retry later.",
+  api: "This API is receiving too many requests. Please retry later.",
+} as const;
+
+type SharedScope = RateLimitConfig & { label: keyof typeof SHARED_LIMIT_MESSAGE };
+
+function withSharedCounter(
+  config: ApiRateLimiterConfig,
+  { store, namespace, routeKey, timeoutMs = 1_500 }: SharedRateLimitConfig,
+): Middleware {
+  if (typeof namespace !== "string" || !SHARED_SCOPE_NAME.test(namespace) ||
+      (routeKey !== undefined && (typeof routeKey !== "string" || !SHARED_SCOPE_NAME.test(routeKey))) ||
+      (config.perApi && routeKey === undefined) ||
+      typeof store?.consume !== "function" || config.failOpen === true ||
+      !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 10_000) {
+    throw new TypeError("Invalid shared rate-limit configuration.");
+  }
+
+  const scopes: SharedScope[] = [];
+  const entries = [
+    ["global", config.global], ["user", config.perUser], ["api", config.perApi],
+  ] as const;
+  for (const [label, policy] of entries) {
+    if (policy === undefined) continue;
+    const { limit, windowMs } = policy;
+    if (!Number.isSafeInteger(limit) || limit < 1 ||
+        !Number.isSafeInteger(windowMs) || windowMs < 1 || windowMs > 86_400_000) {
+      throw new TypeError("Invalid shared rate-limit policy.");
+    }
+    scopes.push({ label, limit, windowMs });
+  }
+  if (scopes.length === 0) throw new TypeError("At least one shared rate limit is required.");
+  const userScope = scopes.find(({ label }) => label === "user");
+  const consume = store.consume.bind(store);
+
+  return async (_req, context) => {
+    const startedAt = Date.now();
+    const windowEnd = ({ windowMs }: SharedScope) => startedAt - startedAt % windowMs + windowMs;
+    const outsideWindow = (scope: SharedScope) => {
+      const now = Date.now();
+      const end = windowEnd(scope);
+      return now < end - scope.windowMs || now >= end;
+    };
+    const controller = new AbortController();
+    const deadline = performance.now() + timeoutMs;
+    let active = scopes[0];
+
+    const evaluate = async () => {
+      const principal = userScope ? getContextPrincipal(context) : undefined;
+      if (userScope && (!principal || principal.length > 512)) {
+        active = userScope;
+        return "unavailable";
+      }
+      for (const scope of scopes) {
+        active = scope;
+        const { label, limit } = scope;
+        const windowEndsAtMs = windowEnd(scope);
+        const late = () => controller.signal.aborted || performance.now() >= deadline ||
+          outsideWindow(scope);
+        if (late()) return "unavailable";
+        const subject = label === "user" ? principal : label === "api" ? routeKey : "";
+        const bucket = hmacValue(JSON.stringify([
+          "shared-rate-limit-v1", namespace, label, subject, windowEndsAtMs,
+        ]));
+        const result = await consume({ bucket, windowEndsAtMs, limit }, controller.signal);
+        if (late()) return "unavailable";
+        if (result?.status === "exhausted") return "exhausted";
+        if (result?.status !== "allowed" || !Number.isSafeInteger(result.remaining) ||
+            result.remaining < 0 || result.remaining >= limit) return "unavailable";
+      }
+      const expiredScope = scopes.find(outsideWindow);
+      if (expiredScope) {
+        active = expiredScope;
+        return "unavailable";
+      }
+      return "allowed";
+    };
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<"unavailable">((resolve) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        resolve("unavailable");
+      }, timeoutMs);
+    });
+
+    const decision = await Promise.race([timeout, evaluate().catch(() => "unavailable" as const)]);
+    clearTimeout(timer);
+    if (decision === "allowed") return true;
+    controller.abort();
+    const failure = { unavailable: decision === "unavailable" };
+    const reset = windowEnd(active);
+    if (failure.unavailable) {
+      const logger = context.extraInputs.get("logger") as { warn?: (message: string) => void } | undefined;
+      logger?.warn?.("Shared rate limit unavailable; rejecting request.");
+    }
+    context.extraOutputs.set("http", {
+      status: rateLimitStatus(failure),
+      body: rateLimitBody(failure, SHARED_LIMIT_MESSAGE[active.label]),
+      headers: {
+        "Cache-Control": "no-store",
+        "Retry-After": String(Math.max(1, Math.ceil((reset - Date.now()) / 1_000))),
+        "X-RateLimit-Limit": String(active.limit),
+        "X-RateLimit-Remaining": "0",
+        "X-RateLimit-Reset": String(Math.ceil(reset / 1_000)),
+      },
+    });
+    return false;
+  };
+}
+
 export function withRateLimiting(config: ApiRateLimiterConfig): Middleware {
+  if (config.sharedCounter !== undefined) return withSharedCounter(config, config.sharedCounter);
   return async (req: HttpRequest, context: InvocationContext) => {
     const path = new URL(req.url).pathname;
 

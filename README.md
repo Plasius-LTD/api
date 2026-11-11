@@ -61,6 +61,47 @@ applyBaselineSecurityHeaders(headers, {
   - `withValidatedParam({ paramName, validate, contextKey? })`
 - Consumers keep validation policy local by supplying their own validator and normalized value contract.
 
+## Shared request limits
+
+`withRateLimiting` uses its existing Redis backend unless you supply a
+`SharedRateLimitCounter`. The explicit backend owns distributed atomic
+admission. For example, after trusted auth middleware sets the invocation user:
+
+```ts
+import { withRateLimiting } from "@plasius/api/middleware";
+
+const limitRequests = withRateLimiting({
+  perUser: { limit: 60, windowMs: 60_000 },
+  perApi: { limit: 120, windowMs: 60_000 },
+  sharedCounter: {
+    store: sharedStore, // implement SharedRateLimitCounter in the host
+    namespace: "content-operations",
+    routeKey: "content-details",
+    timeoutMs: 1_500,
+  },
+});
+```
+
+The store receives only a 64-character keyed digest, an absolute epoch-ms
+window end, the configured limit and an abort signal. It must atomically
+consume one permit in that bucket, expire the record, honour cancellation and
+avoid retrying an ambiguous consume. Return `{status: "allowed", remaining}`
+after the commit, `{status: "exhausted"}` only for proven quota exhaustion,
+or `{status: "unavailable"}` for backend failure. The middleware returns 429
+for exhaustion and 503 for failure, timeouts and invalid results.
+
+Use the same namespace, HMAC secret (`RATE_LIMIT_HMAC_SECRET` or
+`HMAC_SECRET`), window policy and clock across replicas that share a quota.
+Choose distinct namespaces for unrelated budgets; assign fixed route keys
+independently of URL paths. `perUser` requires the verified invocation
+principal and never falls back to a bearer token, address or request header.
+Use a separate global/route limiter before authentication if needed. All
+custom store policies fail closed; `failOpen: true` is rejected. The deadline
+covers all scopes (1–10,000 ms, default 1,500 ms). An earlier scope's permit
+remains consumed if a later scope rejects; cancellation or an ambiguous write
+does not refund it. The host remains responsible for bounding provider load and
+testing its store's behaviour across replicas.
+
 ## Opaque progressive cooldowns
 
 `OpaqueProgressiveCooldownController` coordinates an immutable submission store

@@ -12,3 +12,4 @@
 - [ADR-0010: Admit Immutable Writes with Owner-Bound Reservation Attempts](./adr-0010-owner-bound-immutable-write-admission.md)
 - [ADR-0011: Reconcile Immutable Acceptance with Isolated Control Identifiers](./adr-0011-identifier-isolated-acceptance-reconciliation.md)
 - [ADR-0012: Anchor Immutable Acceptance to Server Reservation Time](./adr-0012-anchor-acceptance-to-reservation-time.md)
+- [ADR-0013: Support host-owned shared request counters](./adr-0013-shared-request-counters.md)
