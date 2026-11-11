@@ -7,6 +7,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 - **Added**
+  - (placeholder)
+
+- **Changed**
+  - (placeholder)
+
+- **Fixed**
+  - (placeholder)
+
+- **Security**
+  - (placeholder)
+
+## [1.3.0] - 2026-11-11
+
+- **Added**
   - Opt-in shared rate-limit counters with fixed route scopes, verified-principal bucketing and bounded fail-closed admission.
 
 - **Changed**
@@ -503,7 +517,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Initial public release scaffold for `@plasius/api`.
 
-[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.2.7...HEAD
+[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.3.0...HEAD
 [1.0.0]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.0
 [1.0.1]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.1
 [1.0.2]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.2
@@ -532,3 +546,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [1.2.5]: https://github.com/Plasius-LTD/api/releases/tag/v1.2.5
 [1.2.6]: https://github.com/Plasius-LTD/api/releases/tag/v1.2.6
 [1.2.7]: https://github.com/Plasius-LTD/api/releases/tag/v1.2.7
+[1.3.0]: https://github.com/Plasius-LTD/api/releases/tag/v1.3.0
