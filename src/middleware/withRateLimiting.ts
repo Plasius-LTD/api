@@ -5,8 +5,11 @@ import { createHmac } from "node:crypto";
 
 export interface RateLimitConfig {
   limit: number;
+  /** Shared-counter policies accept integer durations from 1 ms through 31 days. */
   windowMs: number;
 }
+
+const MAX_SHARED_WINDOW_MS = 31 * 24 * 60 * 60 * 1_000;
 
 export type SharedRateLimitCounterResult =
   | { readonly status: "allowed"; readonly remaining: number }
@@ -291,7 +294,7 @@ function withSharedCounter(
     if (policy === undefined) continue;
     const { limit, windowMs } = policy;
     if (!Number.isSafeInteger(limit) || limit < 1 ||
-        !Number.isSafeInteger(windowMs) || windowMs < 1 || windowMs > 86_400_000) {
+        !Number.isSafeInteger(windowMs) || windowMs < 1 || windowMs > MAX_SHARED_WINDOW_MS) {
       throw new TypeError("Invalid shared rate-limit policy.");
     }
     scopes.push({ label, limit, windowMs });

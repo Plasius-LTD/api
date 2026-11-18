@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - (placeholder)
 
 - **Changed**
-  - (placeholder)
+  - Accept shared-counter fixed windows up to 31 days for bounded monthly admission budgets, preserving absolute expiry, opaque buckets and fail-closed decisions.
 
 - **Fixed**
   - (placeholder)
