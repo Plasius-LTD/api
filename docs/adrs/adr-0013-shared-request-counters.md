@@ -42,3 +42,14 @@ matching policy, clocks and secrets across replicas and must verify their
 adapter's atomicity, expiry and bounded provider load. The package tests the
 portable contract, including rollover, timeouts, failures, and redaction. This
 additive public API ships through the existing protected npm release workflow.
+
+## Bounded duration extension
+
+[Task #82](https://github.com/Plasius-LTD/api/issues/82) extends the accepted
+shared-counter window from one day to 31 days, inclusive. It preserves the
+existing epoch alignment and provider contract without extra operations. The
+host owns retention through the supplied absolute end and must account for two
+fixed-window allowances inside an arbitrary interval of the same duration.
+Invalid, fractional or longer windows still fail at construction before I/O.
+See the [window design](../design/shared-rate-limit-windows.md) for acceptance
+tests, inherited feedback flags and package-first delivery constraints.

@@ -90,6 +90,17 @@ after the commit, `{status: "exhausted"}` only for proven quota exhaustion,
 or `{status: "unavailable"}` for backend failure. The middleware returns 429
 for exhaustion and 503 for failure, timeouts and invalid results.
 
+Shared-counter `windowMs` accepts integer durations from 1 ms through 31 days
+(`31 * 86_400_000`). For example, `global: { limit: 100, windowMs: 31 *
+86_400_000 }` can be combined with daily `perUser` and `perApi` limits. Windows
+are aligned to the Unix epoch; this is neither a calendar month nor a rolling
+quota. An arbitrary 31-day interval may span two allowances. Include that burst
+in any cost model and ensure the host store retains the counter until its
+absolute window end. Changing the configured duration changes quota boundaries;
+coordinate the policy across replicas and disable the host feature during a
+policy migration. Restore a compatible shorter policy before rolling back to
+package versions that only accept windows of up to one day.
+
 Use the same namespace, HMAC secret (`RATE_LIMIT_HMAC_SECRET` or
 `HMAC_SECRET`), window policy and clock across replicas that share a quota.
 Choose distinct namespaces for unrelated budgets; assign fixed route keys

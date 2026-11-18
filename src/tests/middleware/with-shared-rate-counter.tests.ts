@@ -47,6 +47,100 @@ afterEach(() => {
 });
 
 describe("opt-in shared request counter", () => {
+  it.each([1, 60_000, 86_400_000, 31 * 86_400_000])(
+    "accepts bounded duration windows and preserves their absolute end (%i ms)", async (duration) => {
+      clock();
+      const consume = vi.fn<SharedRateLimitCounter["consume"]>()
+        .mockResolvedValue({ status: "allowed", remaining: 0 });
+      const middleware = withRateLimiting({
+        global: { limit: 1, windowMs: duration }, sharedCounter: setup({ consume }),
+      });
+      expect(await middleware(request, invocation().context)).toBe(true);
+      expect(consume).toHaveBeenCalledOnce();
+      expect(consume.mock.calls[0][0]).toEqual({
+        bucket: expect.stringMatching(/^[a-f0-9]{64}$/u), limit: 1,
+        windowEndsAtMs: Date.now() - Date.now() % duration + duration,
+      });
+    },
+  );
+
+  it.each([0, -1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, 31 * 86_400_000 + 1, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects invalid or overlong shared windows before provider access (%s)", (duration) => {
+      const consume = vi.fn<SharedRateLimitCounter["consume"]>();
+      expect(() => withRateLimiting({
+        global: { limit: 1, windowMs: duration }, sharedCounter: setup({ consume }),
+      })).toThrow(TypeError);
+      expect(consume).not.toHaveBeenCalled();
+    },
+  );
+
+  it("shares a 31-day global quota across routes and daily scope rollover, with exact reset and retry headers", async () => {
+    clock();
+    const day = 86_400_000;
+    const month = 31 * day;
+    const start = 700 * month;
+    vi.setSystemTime(start + 500);
+    const counts = new Map<string, number>();
+    const consume = vi.fn<SharedRateLimitCounter["consume"]>(async ({ bucket, limit }) => {
+      const count = counts.get(bucket) ?? 0;
+      if (count >= limit) return { status: "exhausted" };
+      counts.set(bucket, count + 1);
+      return { status: "allowed", remaining: limit - count - 1 };
+    });
+    const policy = {
+      global: { limit: 2, windowMs: month },
+      perUser: { limit: 1, windowMs: day }, perApi: { limit: 1, windowMs: day },
+    };
+    const a = withRateLimiting({ ...policy, sharedCounter: setup({ consume }) });
+    const b = withRateLimiting({
+      ...policy, sharedCounter: { ...setup({ consume }), routeKey: "review-list" },
+    });
+    expect(await a(request, invocation({ userId: principal }).context)).toBe(true);
+    vi.setSystemTime(start + day + 500);
+    expect(await b(request, invocation({ userId: principal }).context)).toBe(true);
+    const denied = invocation({ userId: principal });
+    expect(await a(request, denied.context)).toBe(false);
+    expect(consume).toHaveBeenCalledTimes(7);
+    expect(denied.response()).toMatchObject({
+      status: 429,
+      headers: {
+        "Retry-After": String(30 * day / 1_000),
+        "X-RateLimit-Limit": "2", "X-RateLimit-Remaining": "0",
+        "X-RateLimit-Reset": String((start + month) / 1_000),
+      },
+    });
+    const ids = consume.mock.calls.map(([input]) => input.bucket);
+    expect([ids[0], ids[3], ids[6]]).toEqual([ids[0], ids[0], ids[0]]);
+    expect(ids[1]).not.toBe(ids[4]);
+    vi.setSystemTime(start + month);
+    expect(await a(request, invocation({ userId: principal }).context)).toBe(true);
+    expect(consume.mock.calls[7][0].bucket).not.toBe(ids[0]);
+    expect(consume.mock.calls[7][0].windowEndsAtMs).toBe(start + 2 * month);
+    expect(JSON.stringify([consume.mock.calls, denied.response()])).not.toMatch(/canary|192\.0\.2\.12/u);
+  });
+
+  it("rejects completion at a 31-day boundary without checking later scopes", async () => {
+    clock();
+    const month = 31 * 86_400_000;
+    const end = 701 * month;
+    vi.setSystemTime(end - 500);
+    const consume = vi.fn<SharedRateLimitCounter["consume"]>(async () => {
+      vi.setSystemTime(end);
+      return { status: "allowed", remaining: 0 };
+    });
+    const attempt = invocation();
+    expect(await withRateLimiting({
+      global: { limit: 1, windowMs: month }, perApi: { limit: 1, windowMs },
+      sharedCounter: setup({ consume }),
+    })(request, attempt.context)).toBe(false);
+    expect(attempt.response()).toMatchObject({
+      status: 503,
+      headers: { "Retry-After": "1", "X-RateLimit-Reset": String(end / 1_000) },
+    });
+    expect(consume).toHaveBeenCalledOnce();
+    expect(consume.mock.calls[0][1].aborted).toBe(true);
+  });
+
   it("uses one shared opaque window key across replicas, expiring at the absolute boundary", async () => {
     clock();
     const counts = new Map<string, number>();
