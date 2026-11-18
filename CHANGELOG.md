@@ -10,6 +10,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - (placeholder)
 
 - **Changed**
+  - (placeholder)
+
+- **Fixed**
+  - (placeholder)
+
+- **Security**
+  - (placeholder)
+
+## [1.4.0] - 2026-11-18
+
+- **Added**
+  - (placeholder)
+
+- **Changed**
   - Accept shared-counter fixed windows up to 31 days for bounded monthly admission budgets, preserving absolute expiry, opaque buckets and fail-closed decisions.
 
 - **Fixed**
@@ -517,7 +531,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Initial public release scaffold for `@plasius/api`.
 
-[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/Plasius-LTD/api/compare/v1.4.0...HEAD
 [1.0.0]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.0
 [1.0.1]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.1
 [1.0.2]: https://github.com/Plasius-LTD/api/releases/tag/v1.0.2
@@ -547,3 +561,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [1.2.6]: https://github.com/Plasius-LTD/api/releases/tag/v1.2.6
 [1.2.7]: https://github.com/Plasius-LTD/api/releases/tag/v1.2.7
 [1.3.0]: https://github.com/Plasius-LTD/api/releases/tag/v1.3.0
+[1.4.0]: https://github.com/Plasius-LTD/api/releases/tag/v1.4.0
